@@ -12,8 +12,8 @@ export async function saveResponse(
 ): Promise<boolean> {
   const result = await db.query(
     `INSERT INTO responses
-       (submission_id, audience, locale, survey_version, answers, contact, contact_consent)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (submission_id, audience, locale, survey_version, answers, contacts, contact_consent, respondent_adult)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (submission_id) DO NOTHING`,
     [
       response.submissionId,
@@ -21,8 +21,9 @@ export async function saveResponse(
       response.locale,
       SURVEY_VERSION,
       JSON.stringify(response.answers),
-      response.contact,
+      response.contacts && JSON.stringify(response.contacts),
       response.contactConsent,
+      response.adult,
     ],
   );
   return result.rowCount === 1;

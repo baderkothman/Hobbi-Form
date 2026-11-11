@@ -3,24 +3,33 @@
 // so a shared device doesn't keep anyone's details.
 import { z } from "zod";
 
-import { contactRules } from "@/survey/config";
+import { isContactQuestion, getQuestion } from "@/survey/config";
 import type { Screen } from "@/survey/flow";
 import type { SurveyValues } from "@/survey/form";
 import type { Answers } from "@/survey/types";
 
-const KEY = "hobbi-survey-draft-v1";
+// Bumped whenever questions or pages change, so older drafts are ignored.
+const KEY = "hobbi-survey-draft-v3";
 
 /** Personal details left out of the draft: C21 can identify a club or a person. */
-const NEVER_STORED = new Set([...Object.keys(contactRules), "C21"]);
+function isNeverStored(id: string): boolean {
+  if (id === "C21") return true;
+  try {
+    return isContactQuestion(getQuestion(id));
+  } catch {
+    return true; // Not a current question: nothing worth keeping.
+  }
+}
 
 const draftSchema = z.object({
   submissionId: z.uuid(),
   screen: z.discriminatedUnion("name", [
-    z.object({ name: z.literal("screening") }),
+    z.object({ name: z.literal("age") }),
+    z.object({ name: z.literal("consent") }),
     z.object({ name: z.literal("audience") }),
     z.object({
       name: z.literal("questions"),
-      step: z.number().int().min(0).max(4),
+      page: z.number().int().min(0).max(60),
     }),
     z.object({ name: z.literal("review") }),
   ]),
@@ -60,7 +69,7 @@ export function saveDraft(draft: Draft): void {
   const { adult, consent, audience, answers } = draft.values;
   const storable = Object.fromEntries(
     Object.entries(answers).filter(
-      ([id, value]) => !NEVER_STORED.has(id) && value !== undefined,
+      ([id, value]) => !isNeverStored(id) && value !== undefined,
     ),
   );
   try {

@@ -12,11 +12,20 @@ export type QuestionOption = {
   label: Localized;
 };
 
+/** Show a question only when another question's answer is (or isn't) one of these values. */
+export type ShowIfRule = {
+  question: string;
+  when: "in" | "notIn";
+  values: string[];
+};
+
 type QuestionBase = {
   id: string;
   audience: string;
   prompt: Localized;
   required: boolean;
+  showIf?: ShowIfRule;
+  hint?: Localized;
 };
 
 export type ChoiceQuestion = QuestionBase & {
@@ -40,13 +49,20 @@ export type ScaleQuestion = QuestionBase & {
 
 export type TextQuestion = QuestionBase & {
   type: "paragraph" | "text";
+  /** Contact fields: a WhatsApp number, or a number or email address. */
+  validation?: "phone" | "phoneOrEmail";
+};
+
+export type NumberQuestion = QuestionBase & {
+  type: "number";
 };
 
 export type Question =
   | ChoiceQuestion
   | MultiChoiceQuestion
   | ScaleQuestion
-  | TextQuestion;
+  | TextQuestion
+  | NumberQuestion;
 
 export type AnswerValue = string | string[] | number | undefined;
 export type Answers = Record<string, AnswerValue>;

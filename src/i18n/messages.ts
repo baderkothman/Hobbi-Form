@@ -9,8 +9,6 @@ export type Messages = {
     next: string;
     previous: string;
     switchLanguage: string;
-    stepCounter: (current: number, total: number) => string;
-    surveyProgress: string;
   };
   welcome: {
     title: string;
@@ -32,8 +30,6 @@ export type Messages = {
     consentNo: string;
   };
   exit: {
-    ineligibleTitle: string;
-    ineligibleBody: string;
     declinedTitle: string;
     declinedBody: string;
     back: string;
@@ -51,7 +47,6 @@ export type Messages = {
     selectedCount: (selected: number, max: number) => string;
     limitReached: (max: number) => string;
     characters: (used: number, max: number) => string;
-    contactHint: string;
     clubIdentityHint: string;
     stepErrors: (count: number) => string;
     scaleHint: (min: number, max: number) => string;
@@ -61,6 +56,7 @@ export type Messages = {
     too_many: (max: number) => string;
     too_long: (max: number) => string;
     contact_invalid: string;
+    not_number: string;
     fallback: string;
   };
   review: {
@@ -100,16 +96,14 @@ const en: Messages = {
     next: "Next",
     previous: "Previous",
     switchLanguage: "العربية",
-    stepCounter: (current, total) => `Step ${current} of ${total}`,
-    surveyProgress: "Survey progress",
   },
   welcome: {
     title: "Help shape how Lebanon finds its next hobby.",
     intro:
       "Hobbi is a new app for discovering activities and the clubs behind them. Tell us how you find, join or organize activities today, and what gets in the way.",
     facts: [
-      { label: "Explorers", text: "6–9 minutes" },
-      { label: "Club organizers", text: "8–11 minutes" },
+      { label: "Explorers", text: "6–8 minutes" },
+      { label: "Club organizers", text: "8–10 minutes" },
     ],
     privacyTitle: "Your privacy",
     privacy: [
@@ -126,7 +120,7 @@ const en: Messages = {
   },
   screening: {
     title: "Before you begin",
-    intro: "This survey is voluntary and open to adults.",
+    intro: "Taking part is voluntary.",
     adultQuestion: "Are you 18 or older?",
     adultYes: "Yes, I'm 18 or older",
     adultNo: "No, I'm under 18",
@@ -135,9 +129,6 @@ const en: Messages = {
     consentNo: "No, I don't want to take part",
   },
   exit: {
-    ineligibleTitle: "This survey is for adults",
-    ineligibleBody:
-      "You need to be 18 or older to take part. Nothing you entered was saved. Thanks for stopping by.",
     declinedTitle: "No problem",
     declinedBody:
       "Taking part is entirely your choice. Nothing you entered was saved. Thanks for stopping by.",
@@ -157,8 +148,6 @@ const en: Messages = {
     limitReached: (max) =>
       `You can select up to ${max}. Unselect one to choose another.`,
     characters: (used, max) => `${used} of ${max} characters`,
-    contactHint:
-      "We'll use this only for interviews or pilot invitations. You can leave it blank.",
     clubIdentityHint: "Public details only. Leave blank to stay anonymous.",
     stepErrors: (count) =>
       count === 1
@@ -171,7 +160,8 @@ const en: Messages = {
     too_many: (max) => `Select no more than ${max}.`,
     too_long: (max) => `Keep this under ${max} characters.`,
     contact_invalid:
-      "This doesn't look like a valid contact. Check it, or leave it blank.",
+      "This doesn't look like a valid WhatsApp number or email. Check it, or leave it blank.",
+    not_number: "Enter a whole number, such as 12, or leave it blank.",
     fallback: "Check this answer.",
   },
   review: {
@@ -199,7 +189,7 @@ const en: Messages = {
     title: "Thank you. Your answers are in.",
     body: "What you shared will shape what Hobbi builds first.",
     contactOptIn:
-      "You opted in, so we may reach out about an interview or the pilot. We won't use your details for anything else.",
+      "You left contact details, so we may reach out about what you agreed to: the launch invite, the pilot or an interview. We won't use your details for anything else.",
     otherSurveyExplorer: "Do you also run a club?",
     otherSurveyClub: "Do you also attend activities as an explorer?",
     takeOtherSurvey: "Take the other survey",
@@ -216,16 +206,14 @@ const ar: Messages = {
     next: "التالي",
     previous: "السابق",
     switchLanguage: "English",
-    stepCounter: (current, total) => `الخطوة ${current} من ${total}`,
-    surveyProgress: "التقدم في الاستطلاع",
   },
   welcome: {
     title: "ساعدنا في رسم الطريق إلى هوايتك القادمة في لبنان.",
     intro:
       "Hobbi تطبيق جديد لاكتشاف الأنشطة والأندية التي تنظمها. أخبرنا كيف تجد الأنشطة اليوم أو تشارك فيها أو تنظمها، وما الذي يعيقك.",
     facts: [
-      { label: "المشاركون", text: "6–9 دقائق" },
-      { label: "منظمو الأندية", text: "8–11 دقيقة" },
+      { label: "المشاركون", text: "6–8 دقائق" },
+      { label: "منظمو الأندية", text: "8–10 دقائق" },
     ],
     privacyTitle: "خصوصيتك",
     privacy: [
@@ -242,7 +230,7 @@ const ar: Messages = {
   },
   screening: {
     title: "قبل أن تبدأ",
-    intro: "المشاركة في هذا الاستطلاع طوعية ومخصصة للبالغين.",
+    intro: "المشاركة طوعية.",
     adultQuestion: "هل عمرك 18 عاماً أو أكثر؟",
     adultYes: "نعم، عمري 18 عاماً أو أكثر",
     adultNo: "لا، عمري أقل من 18 عاماً",
@@ -251,9 +239,6 @@ const ar: Messages = {
     consentNo: "لا، لا أرغب في المشاركة",
   },
   exit: {
-    ineligibleTitle: "هذا الاستطلاع مخصص للبالغين",
-    ineligibleBody:
-      "يجب أن يكون عمرك 18 عاماً أو أكثر للمشاركة. لم نحفظ أي شيء أدخلته. شكراً لزيارتك.",
     declinedTitle: "لا بأس",
     declinedBody:
       "المشاركة خيارك بالكامل. لم نحفظ أي شيء أدخلته. شكراً لزيارتك.",
@@ -273,8 +258,6 @@ const ar: Messages = {
     limitReached: (max) =>
       `يمكنك اختيار ${max} كحد أقصى. ألغِ أحد الخيارات لاختيار خيار آخر.`,
     characters: (used, max) => `${used} من ${max} حرفاً`,
-    contactHint:
-      "سنستخدم هذه المعلومات للمقابلات أو الدعوات التجريبية فقط. يمكنك تركها فارغة.",
     clubIdentityHint: "معلومات عامة فقط. اتركها فارغة إذا أردت عدم الكشف عن هويتك.",
     stepErrors: (count) =>
       count === 1
@@ -287,7 +270,8 @@ const ar: Messages = {
     too_many: (max) => `اختر ${max} كحد أقصى.`,
     too_long: (max) => `يجب ألا يتجاوز النص ${max} حرفاً.`,
     contact_invalid:
-      "لا تبدو معلومات التواصل هذه صحيحة. تحقق منها أو اتركها فارغة.",
+      "لا يبدو هذا رقم واتساب أو بريداً إلكترونياً صحيحاً. تحقق منه أو اتركه فارغاً.",
+    not_number: "أدخل رقماً صحيحاً، مثل 12، أو اتركه فارغاً.",
     fallback: "تحقق من هذه الإجابة.",
   },
   review: {
@@ -314,7 +298,7 @@ const ar: Messages = {
     title: "شكراً لك. وصلتنا إجاباتك.",
     body: "ما شاركته معنا سيحدد ما يبنيه Hobbi أولاً.",
     contactOptIn:
-      "لقد وافقت على التواصل، لذا قد نتواصل معك بخصوص مقابلة أو التجربة. لن نستخدم معلوماتك لأي غرض آخر.",
+      "لقد تركت معلومات تواصل، لذا قد نتواصل معك بخصوص ما وافقت عليه: دعوة الإطلاق أو التجربة أو مقابلة. لن نستخدم معلوماتك لأي غرض آخر.",
     otherSurveyExplorer: "هل تدير نادياً أيضاً؟",
     otherSurveyClub: "هل تحضر الأنشطة كمشارك أيضاً؟",
     takeOtherSurvey: "أكمل الاستطلاع الآخر",

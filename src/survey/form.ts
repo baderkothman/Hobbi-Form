@@ -38,19 +38,18 @@ export const surveyResolver: Resolver<SurveyValues> = (
   context,
   options,
 ) => {
+  const minor = values.adult === "no";
+  const answers = values.audience
+    ? answersForSubmission(values.audience, values.answers, minor)
+    : values.answers;
   const schema = z.object({
     adult: yesNo,
     consent: yesNo,
     audience,
-    answers: values.audience ? answersSchema(values.audience) : z.any(),
+    answers: values.audience ? answersSchema(values.audience, answers, minor) : z.any(),
     company_website: z.string(),
   });
-  const candidate = {
-    ...values,
-    answers: values.audience
-      ? answersForSubmission(values.audience, values.answers)
-      : values.answers,
-  };
+  const candidate = { ...values, answers };
   // The dynamic schema is checked at runtime, so its static type adds nothing.
   return (zodResolver(schema as never) as unknown as Resolver<SurveyValues>)(
     candidate,

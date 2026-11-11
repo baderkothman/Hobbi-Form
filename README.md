@@ -1,6 +1,8 @@
 # Hobbi survey
 
-A bilingual (English and Arabic) market research survey for Explorers and club organizers in Lebanon. Participants need no account. Built with Next.js, the [Kitchn](https://kitchn.tonightpass.com) component library, Tailwind CSS, React Hook Form and Zod.
+A bilingual (English and Arabic) market research survey for Explorers and club organizers in Lebanon, built for the Tripoli pilot. Participants need no account. Built with Next.js, the [Kitchn](https://kitchn.tonightpass.com) component library, Tailwind CSS, React Hook Form and Zod.
+
+The survey content (v2) lives in [survey-v2/](survey-v2/): the survey document, the question CSV the app reads, a Google Apps Script that builds the same survey as a Google Form, and the change log from v1. The v1 files in the project root are kept for reference only.
 
 ## Get started
 
@@ -51,8 +53,18 @@ Behind a reverse proxy you run yourself, make sure it sets `X-Forwarded-For`, or
 
 ## Change the survey
 
-- **Wording, options, limits:** edit `Hobbi_Survey_Questions.csv`, run `npm run survey:generate`, and bump `SURVEY_VERSION` in `src/survey/config.ts`. Tests fail if the CSV and the generated config disagree, or if the CSV and `Hobbi_Market_Research_Survey.md` do.
-- **Grouping into steps and contact opt-in rules:** `src/survey/config.ts`.
+- **Wording, options, limits, routing:** edit `survey-v2/Hobbi_Survey_Questions_v2.csv`, run `npm run survey:generate`, and bump `SURVEY_VERSION` in `src/survey/config.ts`. Tests fail if the CSV, the generated config, `survey-v2/Hobbi_Market_Research_Survey_v2.md` and `survey-v2/build-google-form.gs` disagree, so update all of them together.
+- **Grouping into steps:** `src/survey/config.ts`.
+
+The CSV's extra columns:
+
+| Column | Meaning | Example |
+| --- | --- | --- |
+| `Shown if` | Show the question only for these answers to an earlier choice question. `!=` means any other answer. | `E01 = tripoli`, `E01 != tripoli`, `C27 = always \| sometimes` |
+| `Validation` | `phone` (WhatsApp number) or `phoneOrEmail`. Marks the question as a contact field. | `phone` |
+| `Hint (English)`, `Hint (Arabic)` | Shown under the question. | |
+
+A hidden question is never required, and any answer to it is discarded in the browser and again on the server.
 - **Everything around the questions:** `src/i18n/messages.ts`.
 
 Option values are derived from the English label. Rewording an English option changes its stored value, so bump the version and account for it in analysis.
@@ -60,7 +72,7 @@ Option values are derived from the English label. Rewording an English option ch
 ## How it fits together
 
 ```text
-Hobbi_Survey_Questions.csv → scripts/generate-questions.mjs → src/survey/questions.generated.ts
+survey-v2/Hobbi_Survey_Questions_v2.csv → scripts/generate-questions.mjs → src/survey/questions.generated.ts
 
 src/survey/       Framework-free survey logic: config, navigation (flow.ts), validation (schema.ts)
 src/components/
@@ -80,11 +92,13 @@ Kitchn pins dependency versions with known advisories, so `overrides` in `packag
 Responses are stored in a single `responses` table:
 
 - `answers` holds answers as JSON, keyed by question ID (`E01`, `C07`).
-- `contact` holds E17 or C23, apart from the answers so exports can leave it out. A database constraint rejects contact details without `contact_consent`.
-- Nothing is saved for people who decline or are under 18. Contact details typed before an opt-in is withdrawn are discarded in the browser and again on the server.
+- `contacts` holds contact details keyed by question (E22 launch invite, E17 interview, C30 pilot, C23 interview), apart from the answers so exports can leave them out. Each is collected only after its own opt-in, so use a number only for the purpose it was given for. A database constraint rejects contact details without `contact_consent`. (`contact` is the v1 column.)
+- Nothing is saved for people who decline consent.
+- People under 18 can answer as explorers only: they skip the explorer-or-club choice and the age-range question (E23). `respondent_adult` marks their responses, and a database constraint refuses a club response from someone under 18.
+- Contact details typed before an opt-in is withdrawn are discarded in the browser and again on the server.
 - Rate limiting stores an hourly keyed hash of the IP, never linked to a response, and old rows are deleted automatically.
 - Logs record outcomes and timings only, never answers.
-- Drafts live in `sessionStorage` for the tab's lifetime and exclude E17, C21 and C23.
+- Drafts live in `sessionStorage` for the tab's lifetime and exclude every contact field and C21.
 
 **Free text can contain personal details:** people may write anything in E15 and C20, and C21 asks for a club name or handle. Treat `answers` as personal data, and review it before sharing beyond the research team.
 
@@ -97,7 +111,8 @@ SELECT submission_id, audience, locale, survey_version, answers, created_at FROM
 Remove someone's contact details on request:
 
 ```sql
-UPDATE responses SET contact = NULL, contact_consent = false WHERE contact = '...';
+UPDATE responses SET contacts = NULL, contact = NULL, contact_consent = false
+WHERE contacts::text LIKE '%+961 3 123 456%';
 ```
 
 There's no admin screen. Open CSV exports with care: a spreadsheet can treat free text beginning with `=` as a formula.

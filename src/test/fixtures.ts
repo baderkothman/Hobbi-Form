@@ -1,7 +1,15 @@
-import { contactRules, questionsFor } from "@/survey/config";
+import {
+  getQuestion,
+  isContactQuestion,
+  isQuestionVisible,
+  questionsFor,
+} from "@/survey/config";
 import type { Answers, Audience } from "@/survey/types";
 
-/** A complete, valid set of answers: first option everywhere, no optional text. */
+/**
+ * A complete, valid set of answers: first option everywhere, no optional text,
+ * and every contact opt-in declined. Tests opt in explicitly when they need to.
+ */
 export function validAnswers(audience: Audience): Answers {
   const answers: Answers = {};
   for (const question of questionsFor(audience)) {
@@ -11,11 +19,18 @@ export function validAnswers(audience: Audience): Answers {
     }
     if (question.type === "scale") answers[question.id] = question.min;
   }
-  // First option on the opt-in is "yes"; tests opt in explicitly when they need it.
-  for (const rule of Object.values(contactRules)) {
-    if (rule.optInQuestion in answers) answers[rule.optInQuestion] = "no";
+  for (const contact of questionsFor(audience).filter(isContactQuestion)) {
+    const rule = contact.showIf!;
+    const optIn = getQuestion(rule.question);
+    if (optIn.type !== "mc") continue;
+    answers[optIn.id] = optIn.options.find(
+      (option) => !rule.values.includes(option.value),
+    )!.value;
   }
-  return answers;
+  // Leave out questions those answers hide, such as E01a when E01 isn't Tripoli.
+  return Object.fromEntries(
+    Object.entries(answers).filter(([id]) => isQuestionVisible(id, answers)),
+  );
 }
 
 export function validSubmission(

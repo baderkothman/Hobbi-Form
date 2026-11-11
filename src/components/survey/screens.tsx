@@ -6,10 +6,9 @@ import { useController, useFormContext, useWatch } from "react-hook-form";
 import { Button, Card, CardContent, Note } from "@/components/ui/kitchn";
 import {
   getQuestion,
-  isQuestionVisible,
+  isShownTo,
   stepsByAudience,
-  visibleQuestions,
-  type SurveyStep,
+  type QuestionPage,
 } from "@/survey/config";
 import type { SurveyValues } from "@/survey/form";
 import type {
@@ -20,21 +19,28 @@ import type {
   Question,
 } from "@/survey/types";
 
-import { errorText, FieldError, QuestionField, RadioRow } from "./fields";
+import {
+  errorText,
+  FieldError,
+  PageHeadingContext,
+  QuestionField,
+  QuestionTitle,
+  RadioRow,
+  type HeadingRef,
+} from "./fields";
 import { useLocale } from "./locale-context";
 
-export type HeadingRef = React.Ref<HTMLHeadingElement>;
+export type { HeadingRef };
 
 /** Receives focus on every screen change, so screen readers follow the flow. */
 export const ScreenHeading = forwardRef<
   HTMLHeadingElement,
-  { children: ReactNode; large?: boolean; describedBy?: string }
->(function ScreenHeading({ children, large, describedBy }, ref) {
+  { children: ReactNode; large?: boolean }
+>(function ScreenHeading({ children, large }, ref) {
   return (
     <h1
       ref={ref}
       tabIndex={-1}
-      aria-describedby={describedBy}
       className={large ? "display-title" : "screen-title"}
     >
       {children}
@@ -84,16 +90,19 @@ export function Welcome({
 function YesNoField({
   name,
   question,
+  hint,
   yes,
   no,
 }: {
   name: "adult" | "consent";
   question: string;
+  hint?: string;
   yes: string;
   no: string;
 }) {
   const { t } = useLocale();
   const errorId = useId();
+  const hintId = useId();
   const form = useFormContext<SurveyValues>();
   const { field, fieldState } = useController({ name, control: form.control });
   const message = errorText(fieldState.error?.message, t);
@@ -109,9 +118,16 @@ function YesNoField({
       role="radiogroup"
       aria-required="true"
       aria-invalid={message ? true : undefined}
-      aria-describedby={message ? errorId : undefined}
+      aria-describedby={[hint && hintId, message && errorId].filter(Boolean).join(" ") || undefined}
     >
-      <legend className="question-prompt">{question}</legend>
+      <legend className="question-prompt">
+        <QuestionTitle>{question}</QuestionTitle>
+      </legend>
+      {hint && (
+        <p id={hintId} className="field-hint">
+          {hint}
+        </p>
+      )}
       <FieldError id={errorId}>{message}</FieldError>
       <div className="option-list">
         <RadioRow
@@ -135,58 +151,47 @@ function YesNoField({
   );
 }
 
+/** Age and consent each get their own page, so a "No" ends the survey at once. */
 export function Screening({
-  headingRef,
-  describedBy,
+  name,
 }: {
-  headingRef: HeadingRef;
-  describedBy: string;
+  name: "adult" | "consent";
 }) {
   const { t } = useLocale();
   return (
-    <>
-      <ScreenHeading ref={headingRef} describedBy={describedBy}>
-        {t.screening.title}
-      </ScreenHeading>
-      <p className="screen-intro">{t.screening.intro}</p>
-      <div className="question-stack">
+    <PageHeadingContext.Provider value>
+      {name === "adult" ? (
         <YesNoField
           name="adult"
           question={t.screening.adultQuestion}
+          hint={t.screening.intro}
           yes={t.screening.adultYes}
           no={t.screening.adultNo}
         />
+      ) : (
         <YesNoField
           name="consent"
           question={t.screening.consentQuestion}
           yes={t.screening.consentYes}
           no={t.screening.consentNo}
         />
-      </div>
-    </>
+      )}
+    </PageHeadingContext.Provider>
   );
 }
 
 export function ExitScreen({
   headingRef,
-  reason,
   onBack,
 }: {
   headingRef: HeadingRef;
-  reason: "ineligible" | "declined";
   onBack: () => void;
 }) {
   const { t } = useLocale();
   return (
     <div className="end-screen">
-      <ScreenHeading ref={headingRef}>
-        {reason === "ineligible"
-          ? t.exit.ineligibleTitle
-          : t.exit.declinedTitle}
-      </ScreenHeading>
-      <p className="lede">
-        {reason === "ineligible" ? t.exit.ineligibleBody : t.exit.declinedBody}
-      </p>
+      <ScreenHeading ref={headingRef}>{t.exit.declinedTitle}</ScreenHeading>
+      <p className="lede">{t.exit.declinedBody}</p>
       <div>
         <Button variant="ghost" type="primary" data-edge="start" onClick={onBack}>
           {t.exit.back}
@@ -198,10 +203,8 @@ export function ExitScreen({
 
 export function AudienceChoice({
   headingRef,
-  describedBy,
 }: {
   headingRef: HeadingRef;
-  describedBy: string;
 }) {
   const { t } = useLocale();
   const headingId = useId();
@@ -230,7 +233,7 @@ export function AudienceChoice({
   return (
     <>
       <div id={headingId}>
-        <ScreenHeading ref={headingRef} describedBy={describedBy}>
+        <ScreenHeading ref={headingRef}>
           {t.audience.title}
         </ScreenHeading>
       </div>
@@ -266,26 +269,39 @@ export function AudienceChoice({
   );
 }
 
-export function QuestionStep({
+export function QuestionPageView({
   headingRef,
-  describedBy,
-  step,
+  audience,
+  minor,
+  page,
 }: {
   headingRef: HeadingRef;
-  describedBy: string;
-  step: SurveyStep;
+  audience: Audience;
+  minor: boolean;
+  page: QuestionPage;
 }) {
   const { locale } = useLocale();
   const form = useFormContext<SurveyValues>();
-  const answers = useWatch({ control: form.control, name: "answers" });
+  const answers = useWatch({ control: form.control, name: "answers" }) ?? {};
+  const shown = page.questionIds
+    .filter((id) => isShownTo(id, answers, minor))
+    .map(getQuestion);
 
+  // A lone question is the page heading itself.
+  if (shown.length === 1) {
+    return (
+      <PageHeadingContext.Provider value>
+        <QuestionField question={shown[0]} />
+      </PageHeadingContext.Provider>
+    );
+  }
   return (
     <>
-      <ScreenHeading ref={headingRef} describedBy={describedBy}>
-        {step.title[locale]}
+      <ScreenHeading ref={headingRef}>
+        {stepsByAudience[audience][page.section].title[locale]}
       </ScreenHeading>
       <div className="question-stack">
-        {visibleQuestions(step, answers ?? {}).map((question) => (
+        {shown.map((question) => (
           <QuestionField key={question.id} question={question} />
         ))}
       </div>
@@ -323,15 +339,15 @@ export function formatAnswer(
 
 export function Review({
   headingRef,
-  describedBy,
   audience,
+  minor,
   answers,
   onEdit,
   children,
 }: {
   headingRef: HeadingRef;
-  describedBy: string;
   audience: Audience;
+  minor: boolean;
   answers: Answers;
   onEdit: (stepIndex: number) => void;
   children: ReactNode;
@@ -339,7 +355,7 @@ export function Review({
   const { locale, t } = useLocale();
   return (
     <>
-      <ScreenHeading ref={headingRef} describedBy={describedBy}>
+      <ScreenHeading ref={headingRef}>
         {t.review.title}
       </ScreenHeading>
       <p className="screen-intro">{t.review.intro}</p>
@@ -364,7 +380,7 @@ export function Review({
                 </div>
                 <dl className="review-list">
                   {step.questionIds
-                    .filter((id) => isQuestionVisible(id, answers))
+                    .filter((id) => isShownTo(id, answers, minor))
                     .map((id) => {
                       const question = getQuestion(id);
                       const formatted = formatAnswer(
@@ -405,7 +421,8 @@ export function Thanks({
   headingRef: HeadingRef;
   audience?: Audience;
   optedIn: boolean;
-  onOtherSurvey: () => void;
+  /** Absent for under-18s, who can't take the club survey. */
+  onOtherSurvey?: () => void;
 }) {
   const { t } = useLocale();
   return (
@@ -415,16 +432,18 @@ export function Thanks({
       </ScreenHeading>
       <p className="lede">{t.thanks.body}</p>
       {optedIn && <Note type="secondary">{t.thanks.contactOptIn}</Note>}
-      <div className="other-survey">
-        <p>
-          {audience === "club"
-            ? t.thanks.otherSurveyClub
-            : t.thanks.otherSurveyExplorer}
-        </p>
-        <Button variant="ghost" type="primary" onClick={onOtherSurvey}>
-          {t.thanks.takeOtherSurvey}
-        </Button>
-      </div>
+      {onOtherSurvey && (
+        <div className="other-survey">
+          <p>
+            {audience === "club"
+              ? t.thanks.otherSurveyClub
+              : t.thanks.otherSurveyExplorer}
+          </p>
+          <Button variant="ghost" type="primary" onClick={onOtherSurvey}>
+            {t.thanks.takeOtherSurvey}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

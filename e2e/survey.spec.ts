@@ -24,33 +24,48 @@ async function expectNoSidewaysScroll(page: Page) {
   expect(overflow).toBeLessThanOrEqual(0);
 }
 
-async function answerVisibleQuestions(page: Page) {
-  const groups = page.locator("[data-question-id]");
-  for (let i = 0; i < (await groups.count()); i += 1) {
-    const group = groups.nth(i);
+/** A question page must fit on screen: the person shouldn't have to scroll. */
+async function expectNoVerticalScroll(page: Page, label: string) {
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollHeight - window.innerHeight,
+  );
+  expect(overflow, `${label} overflows the screen`).toBeLessThanOrEqual(0);
+}
+
+/** Answers the page: the option at `picks[id]`, or the first. */
+async function answerVisibleQuestions(page: Page, picks: Record<string, number> = {}) {
+  const ids = await page
+    .locator("[data-question-id]")
+    .evaluateAll((elements) => elements.map((e) => (e as HTMLElement).dataset.questionId!));
+  for (const id of ids) {
+    const group = page.locator(`[data-question-id="${id}"]`);
     const choices = group.locator("input[type=radio], input[type=checkbox]");
     if ((await choices.count()) > 0 && !(await group.locator("input:checked").count())) {
-      await choices.first().check();
+      await choices.nth(picks[id] ?? 0).check();
     }
   }
+  return ids.join("+");
 }
 
 async function passScreening(page: Page, locale: Locale) {
   const t = messages[locale];
   await page.getByRole("button", { name: t.welcome.start }).click();
   await page.getByRole("radio", { name: t.screening.adultYes }).check();
+  await page.getByRole("button", { name: t.common.next }).click();
   await page.getByRole("radio", { name: t.screening.consentYes }).check();
   await page.getByRole("button", { name: t.common.next }).click();
 }
 
 test.describe("complete journeys", () => {
-  for (const [locale, audience, optionIndex] of [
-    ["en", "explorer", 0],
-    ["ar", "explorer", 0],
-    ["en", "club", 1],
-    ["ar", "club", 1],
+  // The Arabic runs take the Tripoli and paying-club routes; the English runs the others.
+  const TRIPOLI = { E01: 1, C01: 1, C27: 1 };
+  for (const [locale, audience, optionIndex, picks] of [
+    ["en", "explorer", 0, {}],
+    ["ar", "explorer", 0, TRIPOLI],
+    ["en", "club", 1, {}],
+    ["ar", "club", 1, TRIPOLI],
   ] as const) {
-    test(`${audience} in ${locale}: consent to thank-you, with no a11y violations or overflow`, async ({
+    test(`${audience} in ${locale}: one question per screen, no scrolling, no a11y violations`, async ({
       page,
     }) => {
       const t = messages[locale];
@@ -63,12 +78,12 @@ test.describe("complete journeys", () => {
       await expectNoSidewaysScroll(page);
 
       await page.getByRole("button", { name: t.welcome.start }).click();
+      await expect(page.locator("h1")).toHaveText(t.screening.adultQuestion);
       await expectAccessible(page);
 
       // Trigger validation so error states are audited too.
       await page.getByRole("button", { name: t.common.next }).click();
-      await expect(page.locator(".step-errors")).toHaveText(t.question.stepErrors(2));
-      await expect(page.locator(".step-errors")).toHaveRole("alert");
+      await expect(page.locator(".field-error")).toHaveText(t.errors.required);
       await expectAccessible(page);
       await page.getByRole("button", { name: t.common.previous }).click();
 
@@ -76,14 +91,21 @@ test.describe("complete journeys", () => {
       await expect(page.getByRole("heading", { name: t.audience.title })).toBeVisible();
       await page.locator("input[name=audience]").nth(optionIndex).check();
       await expectAccessible(page);
+      await expectNoVerticalScroll(page, "audience");
       await page.getByRole("button", { name: t.common.next }).click();
 
-      for (let step = 0; step < 5; step += 1) {
-        await expect(page.getByText(t.common.stepCounter(3 + step, 8))).toBeVisible();
-        await answerVisibleQuestions(page);
+      for (let guard = 0; guard < 40; guard += 1) {
+        if (await page.getByRole("heading", { name: t.review.title }).isVisible()) break;
+        // Focus lands on the new page's heading before anything is answered.
+        await expect(page.locator("main h1")).toBeFocused();
+        const label = await answerVisibleQuestions(page, picks);
         await expectAccessible(page);
         await expectNoSidewaysScroll(page);
+        await expectNoVerticalScroll(page, label);
         await page.getByRole("button", { name: t.common.next }).click();
+        await expect(page.locator("[data-question-id]").first().or(
+          page.getByRole("heading", { name: t.review.title }),
+        )).toBeVisible();
       }
 
       await expect(page.getByRole("heading", { name: t.review.title })).toBeVisible();
@@ -110,6 +132,7 @@ test.describe("behaviour in a real browser", () => {
     await page.goto("/en");
     await page.getByRole("button", { name: t.welcome.start }).click();
     await page.getByRole("radio", { name: t.screening.adultYes }).check();
+    await page.getByRole("button", { name: t.common.next }).click();
     await page.getByRole("radio", { name: t.screening.consentNo }).check();
     await page.getByRole("button", { name: t.common.next }).click();
     await expect(page.getByRole("heading", { name: t.exit.declinedTitle })).toBeVisible();
@@ -145,37 +168,63 @@ test.describe("behaviour in a real browser", () => {
     await expect(page.getByRole("radio", { name: "طرابلس" })).toBeChecked();
   });
 
-  test("a full question group works from the keyboard alone", async ({ page, isMobile }) => {
+  test("pages work from the keyboard alone", async ({ page, isMobile }) => {
     test.skip(isMobile, "Keyboard journey is a desktop concern");
+    const pressUntilFocused = async (name: string) => {
+      for (let i = 0; i < 10; i += 1) {
+        await page.keyboard.press("Tab");
+        if (await page.getByRole("button", { name }).evaluate((el) => el === document.activeElement)) return;
+      }
+      throw new Error(`Couldn't tab to ${name}`);
+    };
+
     await page.goto("/en");
     await passScreening(page, "en");
     await page.locator("input[name=audience]").first().check();
     await page.getByRole("button", { name: "Next" }).click();
 
+    // The question is the heading, and it has focus.
     await expect(page.locator("h1")).toBeFocused();
-    await page.keyboard.press("Tab"); // The first group's first radio.
+    await expect(page.locator("h1")).toHaveText("Where do you usually attend activities?");
+    await page.keyboard.press("Tab");
     await page.keyboard.press("ArrowDown");
     await expect(page.getByRole("radio", { name: "Tripoli" })).toBeChecked();
+    await pressUntilFocused("Next");
+    await page.keyboard.press("Enter");
 
-    await page.keyboard.press("Tab"); // Next group.
+    // Tripoli leads to the area question, on its own page.
+    await expect(page.locator("h1")).toHaveText("Which part of Tripoli?");
+    await expect(page.locator("h1")).toBeFocused();
+    await page.keyboard.press("Tab");
     await page.keyboard.press("Space");
-    await expect(page.getByRole("radio", { name: "None" })).toBeChecked();
+    await expect(page.getByRole("radio", { name: "Al Mina" })).toBeChecked();
+    await pressUntilFocused("Next");
+    await page.keyboard.press("Enter");
 
-    await page.keyboard.press("Tab"); // First checkbox.
+    // E02 and E20 share a page: Tab moves from one question to the next.
+    for (const option of ["None", "Never"]) {
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Space");
+      await expect(page.getByRole("radio", { name: option })).toBeChecked();
+    }
+    await pressUntilFocused("Next");
+    await page.keyboard.press("Enter");
+
+    await page.keyboard.press("Tab"); // First checkbox of E03.
     await page.keyboard.press("Space");
-    await expect(page.getByRole("checkbox", { name: "Instagram" })).toBeChecked();
+    await expect(page.getByRole("checkbox", { name: "Instagram", exact: true })).toBeChecked();
     const outline = await page
       .locator(".hobbi-option:has(input:focus-visible)")
       .evaluate((el) => getComputedStyle(el).outlineStyle);
     expect(outline).toBe("solid");
   });
 
-  test("browser Back moves between steps", async ({ page }) => {
+  test("browser Back moves between pages", async ({ page }) => {
     await page.goto("/en");
     await passScreening(page, "en");
     await expect(page.getByRole("heading", { name: messages.en.audience.title })).toBeVisible();
     await page.goBack();
-    await expect(page.getByRole("heading", { name: messages.en.screening.title })).toBeVisible();
+    await expect(page.locator("h1")).toHaveText(messages.en.screening.consentQuestion);
     await page.goForward();
     await expect(page.getByRole("heading", { name: messages.en.audience.title })).toBeVisible();
   });
@@ -191,10 +240,11 @@ test.describe("behaviour in a real browser", () => {
 
 test.describe("API", () => {
   const answers = {
-    E01: "beirut", E02: "none", E03: ["instagram"], E04: ["too_expensive"],
-    E05: ["music"], E06: "free", E07: "depends", E08: 3, E09: "either",
-    E10: "depends_on_the_activity", E11: "maybe", E12: ["notifications"],
-    E13: ["privacy"], E14: 5, E16: "no",
+    E01: "beirut", E01b: "yes_regularly", E02: "none", E20: "never",
+    E03: ["instagram"], E04: ["too_expensive"], E05: ["music"], E06: "free",
+    E07: "depends", E09: "either", E10: "depends_on_the_activity",
+    E18: "whatsapp", E19: "android", E12: ["notifications"], E13: ["privacy"],
+    E21: "no_thanks", E16: "no",
   };
   const submission = () => ({
     submissionId: crypto.randomUUID(),

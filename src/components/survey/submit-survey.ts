@@ -31,7 +31,7 @@ export async function submitSurvey(
           adult: values.adult === "yes",
           consent: values.consent === "yes",
         },
-        answers: answersForSubmission(audience, values.answers),
+        answers: answersForSubmission(audience, values.answers, values.adult === "no"),
         website: values.company_website || undefined,
       }),
     });

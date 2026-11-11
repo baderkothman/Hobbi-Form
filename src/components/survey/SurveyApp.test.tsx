@@ -5,13 +5,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KitchnThemeProvider } from "@/components/ui/kitchn";
 import { messages } from "@/i18n/messages";
-import { questionsFor, stepsByAudience } from "@/survey/config";
+import { getQuestion, questionsFor, stepsByAudience } from "@/survey/config";
 import type { Audience, Locale } from "@/survey/types";
 
 import { SurveyApp } from "./SurveyApp";
 
 const en = messages.en;
 const ar = messages.ar;
+const prompt = (id: string) => getQuestion(id).prompt.en;
 
 const fetchMock = vi.fn<typeof fetch>();
 
@@ -29,58 +30,97 @@ const clickButton = (user: UserEvent, name: string) =>
   user.click(screen.getByRole("button", { name }));
 
 const question = (id: string) => {
-  const element = document.querySelector<HTMLElement>(
-    `[data-question-id="${id}"]`,
-  );
+  const element = document.querySelector<HTMLElement>(`[data-question-id="${id}"]`);
   if (!element) throw new Error(`Question ${id} isn't on screen`);
   return element;
 };
+const isOnScreen = (id: string) =>
+  document.querySelector(`[data-question-id="${id}"]`) !== null;
+const idsOnScreen = () =>
+  [...document.querySelectorAll<HTMLElement>("[data-question-id]")].map(
+    (element) => element.dataset.questionId!,
+  );
+const pageHeading = () => screen.getByRole("heading", { level: 1 });
+
+/** Picks the named options, or the first option of anything unanswered. */
+async function answerPage(user: UserEvent, choices: Record<string, string> = {}) {
+  for (const id of idsOnScreen()) {
+    const group = question(id);
+    if (choices[id]) {
+      await user.click(
+        within(group).getByRole(
+          group.querySelector("input[type=checkbox]") ? "checkbox" : "radio",
+          { name: choices[id] },
+        ),
+      );
+      continue;
+    }
+    const first = group.querySelector<HTMLInputElement>(
+      "input[type=radio], input[type=checkbox]",
+    );
+    if (first && !group.querySelector("input:checked")) await user.click(first);
+  }
+}
+
+/** Presses Next and waits for the page to change. */
+async function next(user: UserEvent) {
+  const before = idsOnScreen().join();
+  await clickButton(user, en.common.next);
+  await waitFor(() => expect(idsOnScreen().join()).not.toBe(before));
+}
+
+/** Answers page after page until a question is on screen. */
+async function advanceTo(user: UserEvent, id: string, choices: Record<string, string> = {}) {
+  for (let guard = 0; guard < 40 && !isOnScreen(id); guard += 1) {
+    await answerPage(user, choices);
+    await next(user);
+  }
+  expect(isOnScreen(id)).toBe(true);
+}
+
+/** Answers every remaining page; returns the question IDs seen on the way. */
+async function completeQuestions(user: UserEvent, choices: Record<string, string> = {}) {
+  const seen: string[][] = [];
+  for (let guard = 0; guard < 40 && idsOnScreen().length > 0; guard += 1) {
+    seen.push(idsOnScreen());
+    await answerPage(user, choices);
+    await next(user);
+  }
+  await screen.findByRole("heading", { level: 1, name: en.review.title });
+  return seen;
+}
 
 async function passScreening(user: UserEvent) {
   await clickButton(user, en.welcome.start);
   await user.click(screen.getByRole("radio", { name: en.screening.adultYes }));
+  await next(user);
   await user.click(screen.getByRole("radio", { name: en.screening.consentYes }));
   await clickButton(user, en.common.next);
+  await screen.findByRole("heading", { name: en.audience.title });
 }
 
 async function chooseAudience(user: UserEvent, audience: Audience) {
-  const title =
-    audience === "explorer"
-      ? en.audience.explorerTitle
-      : en.audience.clubTitle;
+  const title = audience === "explorer" ? en.audience.explorerTitle : en.audience.clubTitle;
   await user.click(screen.getByRole("radio", { name: new RegExp(title) }));
-  await clickButton(user, en.common.next);
+  await next(user);
 }
 
-/** Answers everything on the current step: first option, no optional text. */
-async function answerCurrentStep(user: UserEvent) {
-  for (const group of document.querySelectorAll<HTMLElement>(
-    "[data-question-id]",
-  )) {
-    const input = group.querySelector<HTMLInputElement>(
-      "input[type=radio], input[type=checkbox]",
-    );
-    if (input && !group.querySelector("input:checked")) await user.click(input);
-  }
+async function startAs(audience: Audience) {
+  const user = renderSurvey();
+  await passScreening(user);
+  await chooseAudience(user, audience);
+  return user;
 }
 
-async function completeQuestions(
-  user: UserEvent,
-  audience: Audience,
-  beforeLastNext?: () => Promise<void>,
-) {
-  const steps = stepsByAudience[audience];
-  for (let i = 0; i < steps.length; i += 1) {
-    await screen.findByRole("heading", { level: 1, name: steps[i].title.en });
-    await answerCurrentStep(user);
-    if (i === steps.length - 1) await beforeLastNext?.();
-    await clickButton(user, en.common.next);
-  }
-  await screen.findByRole("heading", { level: 1, name: en.review.title });
+async function toReview(audience: Audience, choices: Record<string, string> = {}) {
+  const user = await startAs(audience);
+  await completeQuestions(user, choices);
+  return user;
 }
 
-const lastBody = () =>
-  JSON.parse(fetchMock.mock.calls.at(-1)![1]!.body as string);
+const lastBody = () => JSON.parse(fetchMock.mock.calls.at(-1)![1]!.body as string);
+const reviewItem = (id: string) =>
+  document.querySelector<HTMLElement>(`[data-review-id="${id}"]`);
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -95,81 +135,95 @@ beforeEach(() => {
 describe("welcome", () => {
   it("states the purpose, duration and privacy terms", () => {
     renderSurvey();
-    expect(
-      screen.getByRole("heading", { level: 1, name: en.welcome.title }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("6–9 minutes")).toBeInTheDocument();
-    expect(screen.getByText("8–11 minutes")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: en.welcome.title })).toBeInTheDocument();
+    expect(screen.getByText("6–8 minutes")).toBeInTheDocument();
+    expect(screen.getByText("8–10 minutes")).toBeInTheDocument();
     expect(screen.getByText(/No account or login/)).toBeInTheDocument();
     expect(screen.getByText(/isn't a signup/)).toBeInTheDocument();
   });
 });
 
 describe("eligibility and consent", () => {
-  const startScreening = async () => {
+  const start = async () => {
     const user = renderSurvey();
     await clickButton(user, en.welcome.start);
     return user;
   };
 
-  it("requires both answers before continuing", async () => {
-    const user = await startScreening();
-    await clickButton(user, en.common.next);
-
-    expect(screen.getAllByText(en.errors.required)).toHaveLength(2);
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      en.question.stepErrors(2),
-    );
-    expect(
-      screen.getByRole("heading", { name: en.screening.title }),
-    ).toBeInTheDocument();
+  it("asks about age on its own page, without saying what each answer leads to", async () => {
+    await start();
+    expect(pageHeading()).toHaveTextContent(en.screening.adultQuestion);
+    expect(screen.queryByText(/explorer|club|adults/i)).toBeNull();
+    expect(screen.queryByRole("radio", { name: en.screening.consentYes })).toBeNull();
+    expect(screen.getByText(en.screening.intro)).toBeInTheDocument();
   });
 
-  it("moves focus to the first unanswered question", async () => {
-    const user = await startScreening();
+  it("requires an answer and moves focus to it", async () => {
+    const user = await start();
     await clickButton(user, en.common.next);
+    expect(screen.getByText(en.errors.required)).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole("radio", { name: en.screening.adultYes })).toHaveFocus(),
     );
   });
 
-  it("ends the survey politely for anyone under 18", async () => {
-    const user = await startScreening();
+  it("lets under-18s take the explorer survey, never offering the club one", async () => {
+    const user = await start();
     await user.click(screen.getByRole("radio", { name: en.screening.adultNo }));
+    await next(user);
+    expect(pageHeading()).toHaveTextContent(en.screening.consentQuestion);
     await user.click(screen.getByRole("radio", { name: en.screening.consentYes }));
-    await clickButton(user, en.common.next);
+    await next(user);
 
-    expect(
-      await screen.findByRole("heading", { name: en.exit.ineligibleTitle }),
-    ).toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(sessionStorage.length).toBe(0);
+    // No audience choice: straight to the first explorer question.
+    expect(idsOnScreen()).toEqual(["E01"]);
+    const pages = await completeQuestions(user);
+    expect(pages.flat()).toContain("E24");
+    expect(pages.flat()).not.toContain("E23"); // Its age ranges start at 18.
+    // No contact details from minors: no launch invite, no interview opt-in.
+    for (const id of ["E21", "E22", "E16", "E17"]) {
+      expect(pages.flat()).not.toContain(id);
+      expect(reviewItem(id)).toBeNull();
+    }
+    expect(screen.queryByRole("textbox", { name: /WhatsApp/ })).toBeNull();
+
+    await clickButton(user, en.review.submit);
+    await screen.findByRole("heading", { name: en.thanks.title });
+    expect(lastBody().screening).toEqual({ adult: false, consent: true });
+    expect(lastBody().audience).toBe("explorer");
+    expect(Object.keys(lastBody().answers)).not.toContain("E21");
+    expect(screen.queryByRole("button", { name: en.thanks.takeOtherSurvey })).toBeNull();
   });
 
-  it("ends the survey politely when consent is declined, and allows changing the answer", async () => {
-    const user = await startScreening();
+  it("returns a minor from the first question to consent, not the audience choice", async () => {
+    const user = await start();
+    await user.click(screen.getByRole("radio", { name: en.screening.adultNo }));
+    await next(user);
+    await user.click(screen.getByRole("radio", { name: en.screening.consentYes }));
+    await next(user);
+    await clickButton(user, en.common.previous);
+    await waitFor(() => expect(pageHeading()).toHaveTextContent(en.screening.consentQuestion));
+  });
+
+  it("asks for consent on its own page, ends politely if declined, and allows changing it", async () => {
+    const user = await start();
     await user.click(screen.getByRole("radio", { name: en.screening.adultYes }));
+    await next(user);
+    expect(pageHeading()).toHaveTextContent(en.screening.consentQuestion);
+
     await user.click(screen.getByRole("radio", { name: en.screening.consentNo }));
     await clickButton(user, en.common.next);
-
-    expect(
-      await screen.findByRole("heading", { name: en.exit.declinedTitle }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: en.exit.declinedTitle })).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(sessionStorage.length).toBe(0);
 
     await clickButton(user, en.exit.back);
-    expect(
-      await screen.findByRole("heading", { name: en.screening.title }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: en.screening.consentQuestion })).toBeInTheDocument();
   });
 
   it("continues to audience selection after an adult consents", async () => {
     const user = renderSurvey();
     await passScreening(user);
-    expect(
-      await screen.findByRole("heading", { name: en.audience.title }),
-    ).toBeInTheDocument();
   });
 });
 
@@ -182,85 +236,76 @@ describe("audience routing", () => {
   });
 
   it.each([
-    ["explorer", "E", 17],
-    ["club", "C", 23],
-  ] as const)("shows only %s questions", async (audience, prefix, total) => {
-    const user = renderSurvey();
-    await passScreening(user);
-    await chooseAudience(user, audience);
+    ["explorer", "E", 23],
+    ["club", "C", 27],
+  ] as const)("shows only %s questions, several to a page where they fit", async (audience, prefix, total) => {
+    const user = await startAs(audience);
+    const pages = await completeQuestions(user);
+    const seen = pages.flat();
 
-    const seen = new Set<string>();
-    for (const step of stepsByAudience[audience]) {
-      await screen.findByRole("heading", { level: 1, name: step.title.en });
-      await answerCurrentStep(user);
-      for (const element of document.querySelectorAll<HTMLElement>(
-        "[data-question-id]",
-      )) {
-        seen.add(element.dataset.questionId!);
-      }
-      await clickButton(user, en.common.next);
+    expect(seen.every((id) => id.startsWith(prefix))).toBe(true);
+    // First options opt in to everything, so every contact field appears, but
+    // only one of the two city follow-ups (the city isn't Tripoli).
+    expect(new Set(seen).size).toBe(total - 1);
+    expect(seen).not.toContain(`${prefix}01a`);
+    expect(pages.some((page) => page.length > 1)).toBe(true);
+    // Questions that decide what comes next are alone on their page.
+    for (const id of audience === "explorer" ? ["E01", "E21", "E16"] : ["C01", "C27", "C13", "C22"]) {
+      expect(pages.find((page) => page.includes(id))).toEqual([id]);
     }
-
-    // Answering with first options opts in, so the contact question appears too.
-    expect([...seen].every((id) => id.startsWith(prefix))).toBe(true);
-    expect(seen.size).toBe(total);
   });
 
   it("submits only the current audience's answers after switching", async () => {
-    const user = renderSurvey();
-    await passScreening(user);
-    await chooseAudience(user, "club");
-    await answerCurrentStep(user);
-
+    const user = await startAs("club");
+    await answerPage(user);
     await clickButton(user, en.common.previous);
+    await screen.findByRole("heading", { name: en.audience.title });
     await chooseAudience(user, "explorer");
-    await completeQuestions(user, "explorer");
+    await completeQuestions(user);
     await clickButton(user, en.review.submit);
 
     await screen.findByRole("heading", { name: en.thanks.title });
-    const body = lastBody();
-    expect(body.audience).toBe("explorer");
-    expect(Object.keys(body.answers).every((id) => id.startsWith("E"))).toBe(true);
+    expect(lastBody().audience).toBe("explorer");
+    expect(Object.keys(lastBody().answers).every((id) => id.startsWith("E"))).toBe(true);
   });
 });
 
-describe("validation", () => {
-  const toFirstExplorerStep = async () => {
-    const user = renderSurvey();
-    await passScreening(user);
-    await chooseAudience(user, "explorer");
-    return user;
-  };
+describe("question pages", () => {
+  it("makes the question the page heading and focuses it on arrival", async () => {
+    await startAs("explorer");
+    expect(pageHeading()).toHaveTextContent(prompt("E01"));
+    expect(pageHeading()).toHaveFocus();
+  });
 
-  it("blocks Next and marks each unanswered question", async () => {
-    const user = await toFirstExplorerStep();
-    await clickButton(user, en.common.next);
-
-    for (const id of ["E01", "E02", "E03"]) {
-      expect(within(question(id)).getByText(en.errors.required)).toBeInTheDocument();
+  it("never shows how many steps or questions there are", async () => {
+    const user = await startAs("club");
+    for (let i = 0; i < 3; i += 1) {
+      expect(screen.queryByText(/\bstep\b|\d+ of \d+|\bof \d+\b/i)).toBeNull();
+      expect(screen.queryByRole("progressbar")).toBeNull();
+      expect(document.querySelector("progress")).toBeNull();
+      await answerPage(user);
+      await next(user);
     }
-    expect(screen.getByRole("radiogroup", { name: /Where do you usually/ })).toHaveAttribute(
-      "aria-invalid",
-      "true",
-    );
-    expect(
-      screen.getByRole("heading", { name: stepsByAudience.explorer[0].title.en }),
-    ).toBeInTheDocument();
+  });
+
+  it("blocks Next until answered and marks the question", async () => {
+    const user = await startAs("explorer");
+    await clickButton(user, en.common.next);
+    expect(within(question("E01")).getByText(en.errors.required)).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup")).toHaveAttribute("aria-invalid", "true");
+    expect(pageHeading()).toHaveTextContent(prompt("E01"));
   });
 
   it("clears an error as soon as it's fixed", async () => {
-    const user = await toFirstExplorerStep();
+    const user = await startAs("explorer");
     await clickButton(user, en.common.next);
-    await user.click(within(question("E01")).getByRole("radio", { name: "Beirut" }));
-
-    await waitFor(() =>
-      expect(within(question("E01")).queryByText(en.errors.required)).toBeNull(),
-    );
-    expect(within(question("E02")).getByText(en.errors.required)).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Beirut" }));
+    await waitFor(() => expect(screen.queryByText(en.errors.required)).toBeNull());
   });
 
   it("enforces the selection limit and explains it", async () => {
-    const user = await toFirstExplorerStep();
+    const user = await startAs("explorer");
+    await advanceTo(user, "E03");
     const group = within(question("E03"));
 
     await user.click(group.getByRole("checkbox", { name: "Instagram" }));
@@ -278,121 +323,193 @@ describe("validation", () => {
   });
 
   it("exposes each checkbox once, without Kitchn's duplicate role", async () => {
-    const user = await toFirstExplorerStep();
-    const group = question("E03");
-    expect(within(group).getAllByRole("checkbox")).toHaveLength(8);
-    expect(group.querySelector("label")).not.toHaveAttribute("role");
-    expect(group.querySelector("label")).not.toHaveAttribute("aria-checked");
-    await user.tab();
+    const user = await startAs("explorer");
+    await advanceTo(user, "E03");
+    expect(within(question("E03")).getAllByRole("checkbox")).toHaveLength(9);
+    expect(question("E03").querySelector("label")).not.toHaveAttribute("role");
+    expect(question("E03").querySelector("label")).not.toHaveAttribute("aria-checked");
   });
 
-  it("preserves answers when moving between steps", async () => {
-    const user = await toFirstExplorerStep();
-    await answerCurrentStep(user);
-    await clickButton(user, en.common.next);
-    await screen.findByRole("heading", {
-      name: stepsByAudience.explorer[1].title.en,
-    });
+  it("preserves answers when moving between pages", async () => {
+    const user = await startAs("explorer");
+    await user.click(screen.getByRole("radio", { name: "Beirut" }));
+    await next(user);
+    expect(isOnScreen("E01b")).toBe(true);
     await clickButton(user, en.common.previous);
-    await screen.findByRole("heading", {
-      name: stepsByAudience.explorer[0].title.en,
-    });
+    await waitFor(() => expect(isOnScreen("E01")).toBe(true));
+    expect(screen.getByRole("radio", { name: "Beirut" })).toBeChecked();
+  });
+});
 
-    expect(within(question("E01")).getByRole("radio", { name: "Beirut" })).toBeChecked();
-    expect(within(question("E03")).getByRole("checkbox", { name: "Instagram" })).toBeChecked();
+describe("routing between pages", () => {
+  it("follows Tripoli with the area page and other cities with the travel page", async () => {
+    let user = await startAs("explorer");
+    await user.click(screen.getByRole("radio", { name: "Tripoli" }));
+    await next(user);
+    expect(idsOnScreen()).toEqual(["E01a"]);
+
+    document.body.innerHTML = "";
+    sessionStorage.clear();
+    user = await startAs("explorer");
+    await user.click(screen.getByRole("radio", { name: "Batroun" }));
+    await next(user);
+    expect(idsOnScreen()).toEqual(["E01b"]);
+  });
+
+  it("discards the area when the city changes away from Tripoli", async () => {
+    const user = await startAs("explorer");
+    await user.click(screen.getByRole("radio", { name: "Tripoli" }));
+    await next(user);
+    await user.click(screen.getByRole("radio", { name: "Al Mina" }));
+    await clickButton(user, en.common.previous);
+    await waitFor(() => expect(isOnScreen("E01")).toBe(true));
+    await user.click(screen.getByRole("radio", { name: "Beirut" }));
+    await next(user);
+    expect(idsOnScreen()).toEqual(["E01b"]);
+
+    await completeQuestions(user);
+    await clickButton(user, en.review.submit);
+    await screen.findByRole("heading", { name: en.thanks.title });
+    expect(lastBody().answers).not.toHaveProperty("E01a");
+    expect(lastBody().answers.E01).toBe("beirut");
+  });
+
+  it("asks clubs about prices only when participants pay", async () => {
+    const user = await startAs("club");
+    await advanceTo(user, "C27");
+    await user.click(screen.getByRole("radio", { name: "Never" }));
+    await next(user);
+    expect(idsOnScreen()).toEqual(["C05"]);
+
+    await clickButton(user, en.common.previous);
+    await waitFor(() => expect(isOnScreen("C27")).toBe(true));
+    await user.click(screen.getByRole("radio", { name: "Sometimes" }));
+    await next(user);
+    expect(idsOnScreen()).toEqual(["C28", "C29"]);
+    expect(within(question("C29")).getByRole("checkbox", { name: "Whish" })).toBeInTheDocument();
+  });
+
+  it("titles a shared page by its section and checks headcounts are whole numbers", async () => {
+    const user = await startAs("club");
+    await advanceTo(user, "C25");
+    expect(idsOnScreen()).toEqual(["C25", "C26"]);
+    expect(pageHeading()).toHaveTextContent(stepsByAudience.club[0].title.en);
+
+    const signedUp = screen.getByRole("textbox", { name: /how many people signed up/ });
+    expect(signedUp).toHaveAttribute("inputmode", "numeric");
+    await user.type(signedUp, "twelve");
+    await clickButton(user, en.common.next);
+    expect(within(question("C25")).getByText(en.errors.not_number)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(en.question.stepErrors(1));
+
+    await user.clear(signedUp);
+    await user.type(signedUp, "12");
+    await next(user);
+    expect(idsOnScreen()).toEqual(["C27"]);
   });
 });
 
 describe("contact details", () => {
-  const toContactStep = async () => {
-    const user = renderSurvey();
-    await passScreening(user);
-    await chooseAudience(user, "explorer");
-    for (const step of stepsByAudience.explorer.slice(0, 4)) {
-      await screen.findByRole("heading", { level: 1, name: step.title.en });
-      await answerCurrentStep(user);
-      await clickButton(user, en.common.next);
-    }
-    await screen.findByRole("heading", {
-      name: stepsByAudience.explorer[4].title.en,
-    });
+  const toInvite = async () => {
+    const user = await startAs("explorer");
+    await advanceTo(user, "E21");
     return user;
   };
-  const contactField = () =>
-    screen.getByRole("textbox", { name: /Optional contact if you opted in/ });
+  const interviewContact = () =>
+    screen.getByRole("textbox", { name: /Optional contact for the follow-up interview/ });
 
-  it("shows the contact field only after an opt-in", async () => {
-    const user = await toContactStep();
-    expect(
-      screen.queryByRole("textbox", { name: /Optional contact/ }),
-    ).toBeNull();
+  it("asks for a WhatsApp number only after the launch invite is accepted", async () => {
+    const user = await toInvite();
+    await user.click(screen.getByRole("radio", { name: "No, thanks" }));
+    await next(user);
+    expect(idsOnScreen()).toEqual(["E16"]);
 
+    await clickButton(user, en.common.previous);
+    await waitFor(() => expect(isOnScreen("E21")).toBe(true));
+    await user.click(screen.getByRole("radio", { name: "Yes, invite me" }));
+    await next(user);
+    const number = screen.getByRole("textbox", { name: /WhatsApp number for the invite/ });
+    expect(pageHeading()).toHaveTextContent(prompt("E22"));
+    expect(number).toHaveAccessibleDescription(/only use it to send the launch invite/);
+    expect(number).toHaveAttribute("inputmode", "tel");
+  });
+
+  it("sends each contact with its own opt-in, and never keeps them in the draft", async () => {
+    const user = await toInvite();
+    await user.click(screen.getByRole("radio", { name: "Yes, invite me" }));
+    await next(user);
+    await user.type(screen.getByRole("textbox"), "+961 3 123 456");
+    expect(JSON.stringify({ ...sessionStorage })).not.toContain("123 456");
+    await next(user);
     await user.click(screen.getByRole("radio", { name: "Yes, I opt in" }));
-    expect(contactField()).toBeInTheDocument();
+    await next(user);
+    await user.type(interviewContact(), "person@example.com");
+    await completeQuestions(user);
+
+    expect(reviewItem("E22")).toHaveTextContent("+961 3 123 456");
+    expect(JSON.stringify({ ...sessionStorage })).not.toContain("person@example.com");
+    await clickButton(user, en.review.submit);
+
+    await screen.findByRole("heading", { name: en.thanks.title });
+    expect(lastBody().answers).toMatchObject({
+      E21: "yes_invite_me",
+      E22: "+961 3 123 456",
+      E17: "person@example.com",
+    });
+    expect(screen.getByText(en.thanks.contactOptIn)).toBeInTheDocument();
   });
 
   it("doesn't require contact details after opting in", async () => {
-    const user = await toContactStep();
+    const user = await toInvite();
+    await user.click(screen.getByRole("radio", { name: "No, thanks" }));
+    await next(user);
     await user.click(screen.getByRole("radio", { name: "Yes, I opt in" }));
-    await clickButton(user, en.common.next);
-    expect(
-      await screen.findByRole("heading", { name: en.review.title }),
-    ).toBeInTheDocument();
+    await next(user);
+    expect(idsOnScreen()).toEqual(["E17"]);
+    await next(user);
+    expect(idsOnScreen()).toEqual(["E23", "E24"]);
   });
 
   it("flags a contact in the wrong format", async () => {
-    const user = await toContactStep();
+    const user = await toInvite();
+    await user.click(screen.getByRole("radio", { name: "No, thanks" }));
+    await next(user);
     await user.click(screen.getByRole("radio", { name: "Yes, I opt in" }));
-    await user.type(contactField(), "not valid!");
+    await next(user);
+    await user.type(interviewContact(), "not valid!");
     await clickButton(user, en.common.next);
 
     expect(await screen.findByText(en.errors.contact_invalid)).toBeInTheDocument();
-    expect(contactField()).toHaveAttribute("aria-invalid", "true");
+    expect(interviewContact()).toHaveAttribute("aria-invalid", "true");
   });
 
   it("discards details typed before the opt-in was withdrawn", async () => {
-    const user = await toContactStep();
+    const user = await toInvite();
+    await user.click(screen.getByRole("radio", { name: "No, thanks" }));
+    await next(user);
     await user.click(screen.getByRole("radio", { name: "Yes, I opt in" }));
-    await user.type(contactField(), "person@example.com");
+    await next(user);
+    await user.type(interviewContact(), "person@example.com");
+    await clickButton(user, en.common.previous);
+    await waitFor(() => expect(isOnScreen("E16")).toBe(true));
     await user.click(screen.getByRole("radio", { name: "No" }));
-    await clickButton(user, en.common.next);
+    await next(user);
+    expect(idsOnScreen()).toEqual(["E23", "E24"]);
 
-    await screen.findByRole("heading", { name: en.review.title });
+    await completeQuestions(user);
     expect(screen.queryByText("person@example.com")).toBeNull();
     await clickButton(user, en.review.submit);
-
     await screen.findByRole("heading", { name: en.thanks.title });
     expect(JSON.stringify(lastBody())).not.toContain("person@example.com");
-  });
-
-  it("sends details after an opt-in, and never keeps them in the draft", async () => {
-    const user = await toContactStep();
-    await user.click(screen.getByRole("radio", { name: "Yes, I opt in" }));
-    await user.type(contactField(), "person@example.com");
-    expect(JSON.stringify({ ...sessionStorage })).not.toContain("person@example.com");
-
-    await clickButton(user, en.common.next);
-    await screen.findByRole("heading", { name: en.review.title });
-    expect(screen.getByText("person@example.com")).toBeInTheDocument();
-    expect(JSON.stringify({ ...sessionStorage })).not.toContain("person@example.com");
-
-    await clickButton(user, en.review.submit);
-    await screen.findByRole("heading", { name: en.thanks.title });
-    expect(lastBody().answers.E17).toBe("person@example.com");
-    expect(screen.getByText(en.thanks.contactOptIn)).toBeInTheDocument();
   });
 });
 
 describe("language switching", () => {
   it("renders Arabic right-to-left from the start", async () => {
     const user = renderSurvey("ar");
-    expect(
-      screen.getByRole("heading", { level: 1, name: ar.welcome.title }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: ar.welcome.title })).toBeInTheDocument();
     await clickButton(user, ar.welcome.start);
-    expect(
-      screen.getByRole("heading", { name: ar.screening.title }),
-    ).toBeInTheDocument();
+    expect(pageHeading()).toHaveTextContent(ar.screening.adultQuestion);
   });
 
   it("switches direction, URL and title in place", async () => {
@@ -403,9 +520,7 @@ describe("language switching", () => {
     expect(document.documentElement.lang).toBe("ar");
     expect(window.location.pathname).toBe("/ar");
     expect(document.title).toBe(ar.meta.title);
-    expect(
-      screen.getByRole("heading", { level: 1, name: ar.welcome.title }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: ar.welcome.title })).toBeInTheDocument();
 
     await clickButton(user, ar.common.switchLanguage);
     expect(document.documentElement.dir).toBe("ltr");
@@ -413,25 +528,23 @@ describe("language switching", () => {
   });
 
   it("keeps answers and translates questions and errors mid-survey", async () => {
-    const user = renderSurvey();
-    await passScreening(user);
-    await chooseAudience(user, "explorer");
-    await user.click(within(question("E01")).getByRole("radio", { name: "Beirut" }));
+    const user = await startAs("explorer");
+    await user.click(screen.getByRole("radio", { name: "Beirut" }));
+    await next(user);
     await clickButton(user, en.common.next);
-    expect(within(question("E02")).getByText(en.errors.required)).toBeInTheDocument();
+    expect(within(question("E01b")).getByText(en.errors.required)).toBeInTheDocument();
 
     await clickButton(user, en.common.switchLanguage);
+    expect(pageHeading()).toHaveTextContent(getQuestion("E01b").prompt.ar);
+    expect(within(question("E01b")).getByText(ar.errors.required)).toBeInTheDocument();
 
-    expect(screen.getByText("أين تشارك عادةً في الأنشطة؟")).toBeInTheDocument();
-    expect(within(question("E01")).getByRole("radio", { name: "بيروت" })).toBeChecked();
-    expect(within(question("E02")).getByText(ar.errors.required)).toBeInTheDocument();
+    await clickButton(user, ar.common.previous);
+    await waitFor(() => expect(isOnScreen("E01")).toBe(true));
+    expect(screen.getByRole("radio", { name: "بيروت" })).toBeChecked();
   });
 
   it("records the language in use when submitting", async () => {
-    const user = renderSurvey();
-    await passScreening(user);
-    await chooseAudience(user, "club");
-    await completeQuestions(user, "club");
+    const user = await toReview("club");
     await clickButton(user, en.common.switchLanguage);
     await clickButton(user, ar.review.submit);
     await screen.findByRole("heading", { name: ar.thanks.title });
@@ -440,69 +553,55 @@ describe("language switching", () => {
 });
 
 describe("review", () => {
-  const toReview = async (audience: Audience = "explorer") => {
-    const user = renderSurvey();
-    await passScreening(user);
-    await chooseAudience(user, audience);
-    await completeQuestions(user, audience);
-    return user;
-  };
-
-  it("lists every question with its answer, marking blanks", async () => {
-    await toReview();
-    for (const q of questionsFor("explorer")) {
-      expect(document.querySelector(`[data-review-id="${q.id}"]`)).not.toBeNull();
+  it("lists every question that applies, marking blanks", async () => {
+    await toReview("explorer");
+    for (const q of questionsFor("explorer").filter((q) => q.id !== "E01a")) {
+      expect(reviewItem(q.id), q.id).not.toBeNull();
     }
-    expect(
-      within(document.querySelector<HTMLElement>('[data-review-id="E15"]')!).getByText(
-        en.review.notAnswered,
-      ),
-    ).toBeInTheDocument();
+    expect(reviewItem("E01a")).toBeNull();
+    expect(within(reviewItem("E15")!).getByText(en.review.notAnswered)).toBeInTheDocument();
   });
 
-  it("leaves out the contact question when nobody opted in", async () => {
-    const user = renderSurvey();
-    await passScreening(user);
-    await chooseAudience(user, "explorer");
-    await completeQuestions(user, "explorer", async () => {
-      await user.click(screen.getByRole("radio", { name: "No" }));
-    });
-    expect(document.querySelector('[data-review-id="E16"]')).not.toBeNull();
-    expect(document.querySelector('[data-review-id="E17"]')).toBeNull();
+  it("leaves out the contact questions when nobody opted in", async () => {
+    await toReview("explorer", { E21: "No, thanks", E16: "No" });
+    expect(reviewItem("E21")).not.toBeNull();
+    expect(reviewItem("E22")).toBeNull();
+    expect(reviewItem("E17")).toBeNull();
   });
 
   it("edits an answer and returns straight to review", async () => {
-    const user = await toReview();
-    const title = stepsByAudience.explorer[0].title.en;
-    await clickButton(user, en.review.edit(title));
-
-    await screen.findByRole("heading", { level: 1, name: title });
-    await user.click(within(question("E01")).getByRole("radio", { name: "Tripoli" }));
+    const user = await toReview("explorer");
+    await clickButton(user, en.review.edit(stepsByAudience.explorer[0].title.en));
+    await waitFor(() => expect(isOnScreen("E01")).toBe(true));
+    await user.click(screen.getByRole("radio", { name: "Batroun" }));
     await clickButton(user, en.review.backToReview);
 
     await screen.findByRole("heading", { level: 1, name: en.review.title });
-    expect(
-      within(document.querySelector<HTMLElement>('[data-review-id="E01"]')!).getByText("Tripoli"),
-    ).toBeInTheDocument();
+    expect(within(reviewItem("E01")!).getByText("Batroun")).toBeInTheDocument();
+  });
+
+  it("asks a follow-up an edit reveals before returning to review", async () => {
+    const user = await toReview("explorer");
+    await clickButton(user, en.review.edit(stepsByAudience.explorer[0].title.en));
+    await waitFor(() => expect(isOnScreen("E01")).toBe(true));
+    await user.click(screen.getByRole("radio", { name: "Tripoli" }));
+    await clickButton(user, en.review.backToReview);
+
+    await waitFor(() => expect(idsOnScreen()).toEqual(["E01a"]));
+    await user.click(screen.getByRole("radio", { name: "Al Mina" }));
+    await clickButton(user, en.review.backToReview);
+    await screen.findByRole("heading", { level: 1, name: en.review.title });
+    expect(within(reviewItem("E01a")!).getByText("Al Mina")).toBeInTheDocument();
+    expect(reviewItem("E01b")).toBeNull();
   });
 });
 
 describe("submission", () => {
-  const toReview = async () => {
-    const user = renderSurvey();
-    await passScreening(user);
-    await chooseAudience(user, "explorer");
-    await completeQuestions(user, "explorer");
-    return user;
-  };
-
   it("sends consent and answers, then shows the thank-you screen", async () => {
-    const user = await toReview();
+    const user = await toReview("explorer");
     await clickButton(user, en.review.submit);
 
-    expect(
-      await screen.findByRole("heading", { name: en.thanks.title }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: en.thanks.title })).toBeInTheDocument();
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/submissions");
     expect(init?.method).toBe("POST");
@@ -517,7 +616,7 @@ describe("submission", () => {
   it("shows a loading state and blocks a double submit", async () => {
     let finish!: (response: Response) => void;
     fetchMock.mockReturnValue(new Promise((resolve) => (finish = resolve)));
-    const user = await toReview();
+    const user = await toReview("explorer");
 
     await clickButton(user, en.review.submit);
     const button = await screen.findByRole("button", { name: en.submit.sending });
@@ -531,14 +630,12 @@ describe("submission", () => {
 
   it("keeps answers on a network failure and retries with the same id", async () => {
     fetchMock.mockRejectedValueOnce(new TypeError("offline"));
-    const user = await toReview();
+    const user = await toReview("explorer");
     await clickButton(user, en.review.submit);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(en.submit.network);
     const firstId = lastBody().submissionId;
-    expect(
-      within(document.querySelector<HTMLElement>('[data-review-id="E01"]')!).getByText("Beirut"),
-    ).toBeInTheDocument();
+    expect(within(reviewItem("E01")!).getByText("Beirut")).toBeInTheDocument();
 
     await clickButton(user, en.submit.retry);
     await screen.findByRole("heading", { name: en.thanks.title });
@@ -552,42 +649,37 @@ describe("submission", () => {
     [429, en.submit.rateLimited],
   ])("explains a %i response and offers a retry", async (status, message) => {
     fetchMock.mockResolvedValueOnce(Response.json({ ok: false }, { status }));
-    const user = await toReview();
+    const user = await toReview("explorer");
     await clickButton(user, en.review.submit);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(message);
     expect(screen.getByRole("button", { name: en.submit.retry })).toBeEnabled();
   });
 
-  it("takes the person to a field the server rejects", async () => {
+  it("takes the person to a question the server rejects", async () => {
     fetchMock.mockResolvedValueOnce(
       Response.json({ ok: false, code: "invalid", fields: ["E05"] }, { status: 400 }),
     );
-    const user = await toReview();
+    const user = await toReview("explorer");
     await clickButton(user, en.review.submit);
 
-    await screen.findByRole("heading", {
-      level: 1,
-      name: stepsByAudience.explorer[1].title.en,
-    });
+    await waitFor(() => expect(idsOnScreen()).toEqual(["E05"]));
+    expect(pageHeading()).toHaveTextContent(prompt("E05"));
     expect(within(question("E05")).getByText(en.errors.fallback)).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(en.review.invalid);
   });
 
   it("offers the other survey to people who are both", async () => {
-    const user = await toReview();
+    const user = await toReview("explorer");
     await clickButton(user, en.review.submit);
     await screen.findByRole("heading", { name: en.thanks.title });
     const firstId = lastBody().submissionId;
 
     await clickButton(user, en.thanks.takeOtherSurvey);
-    await screen.findByRole("heading", {
-      level: 1,
-      name: stepsByAudience.club[0].title.en,
-    });
+    await waitFor(() => expect(idsOnScreen()).toEqual(["C01"]));
     expect(within(question("C01")).queryByRole("radio", { checked: true })).toBeNull();
 
-    await completeQuestions(user, "club");
+    await completeQuestions(user);
     await clickButton(user, en.review.submit);
     await screen.findByRole("heading", { name: en.thanks.title });
     expect(lastBody().audience).toBe("club");
@@ -597,23 +689,22 @@ describe("submission", () => {
 
 describe("draft", () => {
   it("restores answers and position after a reload", async () => {
-    const user = renderSurvey();
-    await passScreening(user);
-    await chooseAudience(user, "explorer");
-    await user.click(within(question("E01")).getByRole("radio", { name: "Tripoli" }));
+    const user = await startAs("explorer");
+    await user.click(screen.getByRole("radio", { name: "Tripoli" }));
+    await next(user);
+    await user.click(screen.getByRole("radio", { name: "Al Mina" }));
 
     document.body.innerHTML = "";
     renderSurvey();
 
     expect(await screen.findByText(en.draft.restored)).toBeInTheDocument();
-    expect(within(question("E01")).getByRole("radio", { name: "Tripoli" })).toBeChecked();
+    expect(idsOnScreen()).toEqual(["E01a"]);
+    expect(screen.getByRole("radio", { name: "Al Mina" })).toBeChecked();
   });
 
   it("ignores a corrupted draft", async () => {
-    sessionStorage.setItem("hobbi-survey-draft-v1", '{"screen":{"name":"thanks"}}');
+    sessionStorage.setItem("hobbi-survey-draft-v3", '{"screen":{"name":"thanks"}}');
     renderSurvey();
-    expect(
-      await screen.findByRole("heading", { name: en.welcome.title }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: en.welcome.title })).toBeInTheDocument();
   });
 });

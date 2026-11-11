@@ -25,7 +25,6 @@ import kitchn, {
   mainTheme,
   Note as KitchnNote,
   NoteContent,
-  Progress as KitchnProgress,
   shouldForwardProp,
   StyledCheckbox,
   StyleSheetManager,
@@ -253,40 +252,6 @@ const StyledNote = kitchn(KitchnNote)`
 `;
 
 export const Note = StyledNote;
-
-const StyledProgress = kitchn(KitchnProgress)`
-  height: 6px;
-
-  &::-webkit-progress-bar {
-    background-color: ${({ theme }) => theme.colors.layout.darker};
-  }
-
-  &::-webkit-progress-value {
-    background: ${({ theme }) => theme.colors.accent.primary};
-    transition: width 0.3s ease-out;
-  }
-
-  &::-moz-progress-bar {
-    border-radius: 5px;
-    background: ${({ theme }) => theme.colors.accent.primary};
-  }
-
-  background-color: ${({ theme }) => theme.colors.layout.darker};
-  border-radius: 5px;
-  overflow: hidden;
-`;
-
-/**
- * Decorative only. Kitchn's role="progressbar" wrapper can't be given an
- * accessible name, so assistive tech gets the visible step counter instead.
- */
-export function ProgressBar({ value, max }: { value: number; max: number }) {
-  return (
-    <div aria-hidden="true">
-      <StyledProgress value={value} max={max} />
-    </div>
-  );
-}
 
 export const Card = kitchn(KitchnFieldset.Container)`
   border-color: rgb(213, 227, 224);

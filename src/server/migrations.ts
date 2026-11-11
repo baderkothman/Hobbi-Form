@@ -27,6 +27,25 @@ export const migrations: readonly { id: string; sql: string }[] = [
       CREATE INDEX rate_limits_expires_at ON rate_limits (expires_at);
     `,
   },
+  {
+    // Survey v2 can collect two contacts per response (an invite or pilot number,
+    // and an interview contact). v1 rows keep their single "contact" column.
+    id: "0002_contacts",
+    sql: `
+      ALTER TABLE responses ADD COLUMN contacts jsonb;
+      ALTER TABLE responses ADD CONSTRAINT contacts_require_consent
+        CHECK (contacts IS NULL OR contact_consent);
+    `,
+  },
+  {
+    // Under-18s may now answer as explorers. Earlier rows all came from adults.
+    id: "0003_respondent_adult",
+    sql: `
+      ALTER TABLE responses ADD COLUMN respondent_adult boolean NOT NULL DEFAULT true;
+      ALTER TABLE responses ADD CONSTRAINT clubs_are_adults
+        CHECK (respondent_adult OR audience = 'explorer');
+    `,
+  },
 ];
 
 export type SqlRunner = {

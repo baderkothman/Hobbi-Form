@@ -1,7 +1,14 @@
 "use client";
 
 // Renders any question from its typed config. No question has its own screen.
-import { useId, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useId,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
 import { useController, useFormContext } from "react-hook-form";
 
 import {
@@ -12,20 +19,48 @@ import {
 } from "@/components/ui/kitchn";
 import type { Messages } from "@/i18n/messages";
 import {
-  contactRules,
+  dependentsOf,
+  isQuestionVisible,
   MAX_PARAGRAPH_LENGTH,
   MAX_TEXT_LENGTH,
+  usesTwoColumns,
 } from "@/survey/config";
 import { answerField, type AnswerField, type SurveyValues } from "@/survey/form";
 import type {
   ChoiceQuestion,
   MultiChoiceQuestion,
+  NumberQuestion,
   Question,
   ScaleQuestion,
   TextQuestion,
 } from "@/survey/types";
 
 import { useLocale } from "./locale-context";
+
+export type HeadingRef = Ref<HTMLHeadingElement>;
+
+/**
+ * When a page holds a single question, that question is the page's heading:
+ * its prompt renders as the h1 that takes focus on arrival, so screen reader
+ * users land on the question itself.
+ */
+export const PageHeadingContext = createContext(false);
+
+export function QuestionTitle({
+  id,
+  children,
+}: {
+  id?: string;
+  children: ReactNode;
+}) {
+  const isPageHeading = useContext(PageHeadingContext);
+  if (!isPageHeading) return <>{children}</>;
+  return (
+    <h1 id={id} tabIndex={-1} className="question-title">
+      {children}
+    </h1>
+  );
+}
 
 export function errorText(
   code: string | undefined,
@@ -42,9 +77,22 @@ export function errorText(
       return t.errors.too_long(limits?.maxLength ?? 0);
     case "contact_invalid":
       return t.errors.contact_invalid;
+    case "not_number":
+      return t.errors.not_number;
     default:
       return t.errors.fallback;
   }
+}
+
+/**
+ * Short labels sit two to a row everywhere. Lists of four or more get two
+ * columns on wider screens, and long lists get tighter rows on phones.
+ */
+function optionLayout(question: ChoiceQuestion | MultiChoiceQuestion): string {
+  if (usesTwoColumns(question)) return "option-grid two-up";
+  const count = question.options.length;
+  const base = count >= 4 ? "option-grid" : "option-list";
+  return count >= 9 ? `${base} is-long` : base;
 }
 
 export function FieldError({ id, children }: { id: string; children?: string }) {
@@ -110,7 +158,9 @@ function QuestionGroup({
   children,
 }: GroupProps) {
   const { locale, t } = useLocale();
-  const descriptions = [errorMessage && errorId, describedBy]
+  const hintId = useId();
+  const hint = question.hint?.[locale];
+  const descriptions = [hint && hintId, errorMessage && errorId, describedBy]
     .filter(Boolean)
     .join(" ");
 
@@ -124,11 +174,18 @@ function QuestionGroup({
       aria-describedby={descriptions || undefined}
     >
       <legend className="question-prompt">
-        {question.prompt[locale]}
-        {!question.required && (
-          <span className="optional-tag">{t.question.optional}</span>
-        )}
+        <QuestionTitle>
+          {question.prompt[locale]}
+          {!question.required && (
+            <span className="optional-tag">{t.question.optional}</span>
+          )}
+        </QuestionTitle>
       </legend>
+      {hint && (
+        <p id={hintId} className="field-hint">
+          {hint}
+        </p>
+      )}
       <FieldError id={errorId}>{errorMessage}</FieldError>
       {children}
     </fieldset>
@@ -144,6 +201,16 @@ function useAnswer(id: string) {
     field.onChange(value);
     // Errors appear on Next; after that, each one clears as soon as it's fixed.
     if (fieldState.error) void form.trigger(name);
+    // An answer can hide other questions: moving E01 away from Tripoli hides
+    // E01a, and withdrawing an opt-in hides its contact field. Their answers
+    // are discarded at once, so nothing hidden is ever sent.
+    const answers = form.getValues("answers");
+    for (const dependent of dependentsOf(id)) {
+      if (!isQuestionVisible(dependent, answers)) {
+        form.setValue(answerField(dependent), undefined);
+        form.clearErrors(answerField(dependent));
+      }
+    }
   };
 
   return { name, form, field, fieldState, setValue };
@@ -152,19 +219,8 @@ function useAnswer(id: string) {
 function ChoiceField({ question }: { question: ChoiceQuestion }) {
   const { locale, t } = useLocale();
   const errorId = useId();
-  const { name, form, field, fieldState, setValue } = useAnswer(question.id);
-
-  const select = (value: string) => {
-    setValue(value);
-    // Withdrawing an opt-in discards the contact details immediately.
-    for (const [contactId, rule] of Object.entries(contactRules)) {
-      if (rule.optInQuestion === question.id && value !== rule.optInValue) {
-        const contactField = answerField(contactId);
-        form.setValue(contactField, undefined);
-        form.clearErrors(contactField);
-      }
-    }
-  };
+  const { name, field, fieldState, setValue } = useAnswer(question.id);
+  const select = (value: string) => setValue(value);
 
   return (
     <QuestionGroup
@@ -174,7 +230,7 @@ function ChoiceField({ question }: { question: ChoiceQuestion }) {
       errorMessage={errorText(fieldState.error?.message, t)}
     >
       <div
-        className={question.options.length >= 5 ? "option-grid" : "option-list"}
+        className={optionLayout(question)}
       >
         {question.options.map((option) => (
           <RadioRow
@@ -226,7 +282,7 @@ function MultiChoiceField({ question }: { question: MultiChoiceQuestion }) {
       describedBy={max ? statusId : undefined}
     >
       <div
-        className={question.options.length >= 5 ? "option-grid" : "option-list"}
+        className={optionLayout(question)}
       >
         {question.options.map((option) => {
           const checked = selected.includes(option.value);
@@ -304,23 +360,42 @@ function ScaleField({ question }: { question: ScaleQuestion }) {
   );
 }
 
-function FreeTextField({ question }: { question: TextQuestion }) {
+function FreeTextField({
+  question,
+}: {
+  question: TextQuestion | NumberQuestion;
+}) {
   const { locale, t } = useLocale();
   const inputId = useId();
   const errorId = useId();
   const hintId = useId();
   const { name, form, field, fieldState, setValue } = useAnswer(question.id);
 
+  const isPageHeading = useContext(PageHeadingContext);
+  const titleId = useId();
   const isParagraph = question.type === "paragraph";
+  const isNumber = question.type === "number";
+  const validation = question.type === "text" ? question.validation : undefined;
   const maxLength = isParagraph ? MAX_PARAGRAPH_LENGTH : MAX_TEXT_LENGTH;
-  const value = typeof field.value === "string" ? field.value : "";
+  const value =
+    typeof field.value === "string" || typeof field.value === "number"
+      ? String(field.value)
+      : "";
   const message = errorText(fieldState.error?.message, t, { maxLength });
 
-  const hint = contactRules[question.id]
-    ? t.question.contactHint
-    : question.id === "C21"
-      ? t.question.clubIdentityHint
-      : undefined;
+  const prompt = (
+    <>
+      {question.prompt[locale]}
+      {/* Short-text prompts and hints already say they're optional. */}
+      {(isParagraph || isNumber) && !question.required && (
+        <span className="optional-tag">{t.question.optional}</span>
+      )}
+    </>
+  );
+
+  const hint =
+    question.hint?.[locale] ??
+    (question.id === "C21" ? t.question.clubIdentityHint : undefined);
 
   const shared = {
     id: inputId,
@@ -328,6 +403,8 @@ function FreeTextField({ question }: { question: TextQuestion }) {
     ref: field.ref,
     value,
     dir: "auto",
+    // As the page heading, the prompt is an h1 that can't be a <label>.
+    "aria-labelledby": isPageHeading ? titleId : undefined,
     "aria-invalid": message ? true : undefined,
     "aria-describedby":
       [message && errorId, hint && hintId].filter(Boolean).join(" ") || undefined,
@@ -342,13 +419,15 @@ function FreeTextField({ question }: { question: TextQuestion }) {
 
   return (
     <div className="question" data-question-id={question.id}>
-      <label htmlFor={inputId} className="question-prompt">
-        {question.prompt[locale]}
-        {/* The wording of short-text questions already says they're optional. */}
-        {isParagraph && (
-          <span className="optional-tag">{t.question.optional}</span>
-        )}
-      </label>
+      {isPageHeading ? (
+        <div className="question-prompt">
+          <QuestionTitle id={titleId}>{prompt}</QuestionTitle>
+        </div>
+      ) : (
+        <label htmlFor={inputId} className="question-prompt">
+          {prompt}
+        </label>
+      )}
       {hint && (
         <p id={hintId} className="field-hint">
           {hint}
@@ -363,7 +442,7 @@ function FreeTextField({ question }: { question: TextQuestion }) {
           </p>
         </>
       ) : (
-        // Emails and handles must survive phone keyboards unchanged.
+        // Numbers and emails must survive phone keyboards unchanged.
         <TextInput
           {...shared}
           size="large"
@@ -371,6 +450,8 @@ function FreeTextField({ question }: { question: TextQuestion }) {
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
+          inputMode={isNumber ? "numeric" : validation === "phone" ? "tel" : "text"}
+          {...(isNumber && { className: "count-input" })}
         />
       )}
     </div>
@@ -387,6 +468,7 @@ export function QuestionField({ question }: { question: Question }) {
       return <ScaleField question={question} />;
     case "paragraph":
     case "text":
+    case "number":
       return <FreeTextField question={question} />;
   }
 }

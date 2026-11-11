@@ -53,7 +53,7 @@ async function storedResponses() {
     locale: string;
     survey_version: string;
     answers: Record<string, unknown>;
-    contact: string | null;
+    contacts: Record<string, string> | null;
     contact_consent: boolean;
   }[];
 }
@@ -72,7 +72,7 @@ describe("saving a response", () => {
     expect(row.locale).toBe("ar");
     expect(row.survey_version).toBeTruthy();
     expect(row.answers).toEqual(submission.answers);
-    expect(row.contact).toBeNull();
+    expect(row.contacts).toBeNull();
     expect(row.contact_consent).toBe(false);
   });
 
@@ -141,7 +141,7 @@ describe("contact details", () => {
   it("stores them, outside the answers, after an opt-in", async () => {
     await post(withContact("yes_i_opt_in"));
     const [row] = await storedResponses();
-    expect(row.contact).toBe("person@example.com");
+    expect(row.contacts).toEqual({ E17: "person@example.com" });
     expect(row.contact_consent).toBe(true);
     expect(row.answers).not.toHaveProperty("E17");
   });
@@ -149,7 +149,7 @@ describe("contact details", () => {
   it("never stores them without an opt-in, even if a client sends them", async () => {
     expect((await post(withContact("no"))).status).toBe(201);
     const [row] = await storedResponses();
-    expect(row.contact).toBeNull();
+    expect(row.contacts).toBeNull();
     expect(JSON.stringify(row)).not.toContain("person@example.com");
   });
 
@@ -161,6 +161,35 @@ describe("contact details", () => {
         [crypto.randomUUID()],
       ),
     ).rejects.toThrow(/contact_requires_consent/);
+    await expect(
+      db.query(
+        `INSERT INTO responses (submission_id, audience, locale, survey_version, answers, contacts, contact_consent)
+         VALUES ($1, 'explorer', 'en', 'test', '{}', '{"E22": "+961 3 123 456"}', false)`,
+        [crypto.randomUUID()],
+      ),
+    ).rejects.toThrow(/contacts_require_consent/);
+  });
+
+  it("records under-18s, and refuses a club response from one", async () => {
+    const minor = { screening: { adult: false, consent: true } };
+    expect((await post(validSubmission("explorer", minor))).status).toBe(201);
+    const [row] = (await db.query("SELECT respondent_adult FROM responses")).rows;
+    expect(row).toEqual({ respondent_adult: false });
+
+    expect((await post(validSubmission("club", minor))).status).toBe(400);
+    await expect(
+      db.query(
+        `INSERT INTO responses (submission_id, audience, locale, survey_version, answers, respondent_adult)
+         VALUES ($1, 'club', 'en', 'test', '{}', false)`,
+        [crypto.randomUUID()],
+      ),
+    ).rejects.toThrow(/clubs_are_adults/);
+  });
+
+  it("stores the survey version with each response", async () => {
+    await post(validSubmission());
+    const { rows } = await db.query("SELECT survey_version FROM responses");
+    expect(rows).toEqual([{ survey_version: "2026-11-v2" }]);
   });
 });
 

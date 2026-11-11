@@ -2,24 +2,28 @@
 
 // Owns the survey's state: the current screen, the language, the form and the
 // submission. What each screen renders lives in screens.tsx and fields.tsx.
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 
-import { Button, Note, ProgressBar } from "@/components/ui/kitchn";
+import { Button, Note } from "@/components/ui/kitchn";
 import { messages } from "@/i18n/messages";
 import {
-  isQuestionVisible,
+  getQuestion,
+  isContactQuestion,
+  isShownTo,
+  pagesFor,
   questionsFor,
-  stepsByAudience,
-  visibleQuestions,
 } from "@/survey/config";
 import {
-  afterScreening,
+  afterAge,
+  afterConsent,
   completedFraction,
+  firstPageOfSection,
+  firstQuestionScreen,
   nextScreen,
+  pageOf,
   previousScreen,
-  stepNumber,
-  TOTAL_STEPS,
+  progress,
   type Screen,
 } from "@/survey/flow";
 import {
@@ -36,7 +40,7 @@ import { Mosaic } from "./Mosaic";
 import {
   AudienceChoice,
   ExitScreen,
-  QuestionStep,
+  QuestionPageView,
   Review,
   Screening,
   Thanks,
@@ -61,12 +65,12 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
   const [lastSubmission, setLastSubmission] = useState<{
     audience?: SurveyValues["audience"];
     optedIn: boolean;
-  }>({ optedIn: false });
+    adult: boolean;
+  }>({ optedIn: false, adult: true });
 
   const submissionId = useRef<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const hasNavigated = useRef(false);
-  const stepCounterId = useId();
 
   const form = useForm<SurveyValues>({
     resolver: surveyResolver,
@@ -75,6 +79,7 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
   });
   const audience = useWatch({ control: form.control, name: "audience" });
   const answers = useWatch({ control: form.control, name: "answers" });
+  const minor = useWatch({ control: form.control, name: "adult" }) === "no";
 
   const t = messages[locale];
 
@@ -129,12 +134,15 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
   useEffect(() => {
     if (!hasNavigated.current) return;
     window.scrollTo(0, 0);
-    headingRef.current?.focus({ preventScroll: true });
+    // A lone question renders its own h1, so look the heading up in the page.
+    (headingRef.current ?? document.querySelector<HTMLElement>("main h1"))?.focus({
+      preventScroll: true,
+    });
   }, [screen]);
 
   // Keep the draft current on every change, while there is something to keep.
   useEffect(() => {
-    if (!["screening", "audience", "questions", "review"].includes(screen.name)) {
+    if (!["age", "consent", "audience", "questions", "review"].includes(screen.name)) {
       return;
     }
     submissionId.current ??= crypto.randomUUID();
@@ -185,17 +193,26 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
     return valid;
   };
 
+  const pageQuestions = (page: number) =>
+    audience
+      ? pagesFor(audience)[page].questionIds.filter((id) =>
+          isShownTo(id, form.getValues("answers"), minor),
+        )
+      : [];
+
   const handleNext = async () => {
-    if (screen.name === "screening") {
-      const valid = await validateAndFocus([
-        { field: "adult", focusId: "adult" },
-        { field: "consent", focusId: "consent" },
-      ]);
-      if (!valid) return;
-      const { adult, consent } = form.getValues();
-      const next = afterScreening(adult!, consent!);
-      // Nobody who stops here leaves anything behind on the device.
-      if (next.name !== "audience") clearDraft();
+    if (screen.name === "age" || screen.name === "consent") {
+      const field = screen.name === "age" ? "adult" : "consent";
+      if (!(await validateAndFocus([{ field, focusId: field }]))) return;
+      if (screen.name === "age") {
+        go(afterAge());
+        return;
+      }
+      const next = afterConsent(form.getValues("consent")!, minor, form.getValues("answers"));
+      // Someone who declines leaves nothing behind on the device.
+      if (next.name === "declined") clearDraft();
+      // Under-18s can only be explorers, so the audience is set for them.
+      if (minor && next.name !== "declined") form.setValue("audience", "explorer");
       go(next);
       return;
     }
@@ -203,45 +220,55 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
       const valid = await validateAndFocus([
         { field: "audience", focusId: "audience" },
       ]);
-      if (valid) go(nextScreen(screen, audience));
+      if (valid) go(nextScreen(screen, audience, form.getValues("answers"), minor));
       return;
     }
     if (screen.name === "questions" && audience) {
-      const step = stepsByAudience[audience][screen.step];
       const valid = await validateAndFocus(
-        visibleQuestions(step, form.getValues("answers")).map((question) => ({
-          field: answerField(question.id),
-          focusId: question.id,
+        pageQuestions(screen.page).map((id) => ({
+          field: answerField(id),
+          focusId: id,
         })),
       );
       if (!valid) return;
-      if (returnToReview) {
+      // An edit can reveal a new follow-up, such as E01a after changing E01 to
+      // Tripoli. That page comes next before returning to the review.
+      const next = nextScreen(screen, audience, form.getValues("answers"), minor);
+      const nextIsUnanswered =
+        next.name === "questions" &&
+        pageQuestions(next.page).some((id) => {
+          const value = form.getValues("answers")[id];
+          return getQuestion(id).required && (value === undefined || value === "");
+        });
+      if (returnToReview && !nextIsUnanswered) {
         setReturnToReview(false);
         go({ name: "review" });
       } else {
-        go(nextScreen(screen, audience));
+        go(next);
       }
     }
   };
 
   const handlePrevious = () => {
     setReturnToReview(false);
-    go(previousScreen(screen, audience));
+    go(previousScreen(screen, audience, form.getValues("answers"), minor));
   };
 
-  const editStep = (step: number) => {
+  const editSection = (section: number) => {
+    if (!audience) return;
     setReturnToReview(true);
-    go({ name: "questions", step });
+    go({
+      name: "questions",
+      page: firstPageOfSection(audience, section, form.getValues("answers"), minor),
+    });
   };
 
   const openQuestionForFixing = (questionId: string) => {
     if (!audience) return;
-    const step = stepsByAudience[audience].findIndex((candidate) =>
-      candidate.questionIds.includes(questionId),
-    );
-    if (step === -1) return;
+    const page = pageOf(audience, questionId);
+    if (page === -1) return;
     setReturnToReview(true);
-    go({ name: "questions", step });
+    go({ name: "questions", page });
     setNotice(t.review.invalid);
     window.setTimeout(() => focusQuestion(questionId), 0);
   };
@@ -252,7 +279,7 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
     // Back, Forward or a restored draft can skip steps, so check everything.
     const values = form.getValues();
     const active = questionsFor(audience).filter((question) =>
-      isQuestionVisible(question.id, values.answers),
+      isShownTo(question.id, values.answers, minor),
     );
     const valid = await form.trigger(
       active.map((question) => answerField(question.id)),
@@ -275,12 +302,12 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
     );
 
     if (result.ok) {
-      const contact = active.find((question) =>
-        ["E17", "C23"].includes(question.id),
-      );
       setLastSubmission({
         audience,
-        optedIn: Boolean(contact && values.answers[contact.id]),
+        adult: !minor,
+        optedIn: active.some(
+          (question) => isContactQuestion(question) && values.answers[question.id],
+        ),
       });
       clearDraft();
       submissionId.current = null;
@@ -302,13 +329,9 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
   };
 
   const startOtherSurvey = () => {
-    form.reset({
-      ...emptyValues(),
-      adult: "yes",
-      consent: "yes",
-      audience: lastSubmission.audience === "club" ? "explorer" : "club",
-    });
-    go({ name: "questions", step: 0 });
+    const other = lastSubmission.audience === "club" ? "explorer" : "club";
+    form.reset({ ...emptyValues(), adult: "yes", consent: "yes", audience: other });
+    go(firstQuestionScreen(other));
   };
 
   const startOver = () => {
@@ -320,24 +343,20 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
     go(WELCOME);
   };
 
-  const currentStep = stepNumber(screen);
+  const currentStep = progress(screen, audience, answers ?? {}, minor);
   const isReview = screen.name === "review" && audience;
   const showsNav = currentStep !== null && !isReview;
   const fullBleed = screen.name === "welcome" || screen.name === "thanks";
 
+  // A lone question shows its own error, so the page-level summary is only
+  // needed on the one page that holds two questions.
   const errorCount = (() => {
-    const errors = form.formState.errors;
-    if (screen.name === "questions" && audience) {
-      return visibleQuestions(
-        stepsByAudience[audience][screen.step],
-        answers ?? {},
-      ).filter((question) => errors.answers?.[question.id]).length;
-    }
-    if (screen.name === "screening") {
-      return [errors.adult, errors.consent].filter(Boolean).length;
-    }
-    if (screen.name === "audience") return errors.audience ? 1 : 0;
-    return 0;
+    if (screen.name !== "questions" || !audience) return 0;
+    const ids = pagesFor(audience)[screen.page].questionIds.filter((id) =>
+      isShownTo(id, answers ?? {}, minor),
+    );
+    if (ids.length < 2) return 0;
+    return ids.filter((id) => form.formState.errors.answers?.[id]).length;
   })();
 
   return (
@@ -372,15 +391,6 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
                 {t.common.switchLanguage}
               </Button>
             </header>
-
-            {currentStep !== null && (
-              <div className="step-progress">
-                <p id={stepCounterId}>
-                  {t.common.stepCounter(currentStep, TOTAL_STEPS)}
-                </p>
-                <ProgressBar value={currentStep} max={TOTAL_STEPS} />
-              </div>
-            )}
 
             {/* Without JS the question flow can't run: say so rather than show a dead button. */}
             <noscript>
@@ -425,36 +435,34 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
                   onStart={() => go(nextScreen(screen))}
                 />
               )}
-              {screen.name === "screening" && (
-                <Screening headingRef={headingRef} describedBy={stepCounterId} />
-              )}
-              {(screen.name === "ineligible" || screen.name === "declined") && (
-                <ExitScreen
-                  headingRef={headingRef}
-                  reason={screen.name}
-                  onBack={handlePrevious}
+              {(screen.name === "age" || screen.name === "consent") && (
+                <Screening
+                  name={screen.name === "age" ? "adult" : "consent"}
                 />
+              )}
+              {screen.name === "declined" && (
+                <ExitScreen headingRef={headingRef} onBack={handlePrevious} />
               )}
               {screen.name === "audience" && (
                 <AudienceChoice
                   headingRef={headingRef}
-                  describedBy={stepCounterId}
                 />
               )}
               {screen.name === "questions" && audience && (
-                <QuestionStep
+                <QuestionPageView
                   headingRef={headingRef}
-                  describedBy={stepCounterId}
-                  step={stepsByAudience[audience][screen.step]}
+                  audience={audience}
+                  minor={minor}
+                  page={pagesFor(audience)[screen.page]}
                 />
               )}
               {isReview && (
                 <Review
                   headingRef={headingRef}
-                  describedBy={stepCounterId}
                   audience={audience}
+                  minor={minor}
                   answers={answers ?? {}}
-                  onEdit={editStep}
+                  onEdit={editSection}
                 >
                   {/* Honeypot: out of sight and out of the tab order for people. */}
                   <div className="honeypot" aria-hidden="true">
@@ -509,7 +517,8 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
                   headingRef={headingRef}
                   audience={lastSubmission.audience}
                   optedIn={lastSubmission.optedIn}
-                  onOtherSurvey={startOtherSurvey}
+                  // Under-18s can't be club organizers, so there's no other survey.
+                  onOtherSurvey={lastSubmission.adult ? startOtherSurvey : undefined}
                 />
               )}
 
@@ -543,7 +552,7 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
             aria-hidden="true"
           >
             <Mosaic
-              fraction={fullBleed ? 1 : completedFraction(screen)}
+              fraction={fullBleed ? 1 : completedFraction(screen, audience, answers ?? {}, minor)}
             />
           </aside>
         </div>

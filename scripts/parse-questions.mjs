@@ -3,7 +3,7 @@
 
 const ARABIC = /[؀-ۿ]/;
 
-// The scale's end labels are defined in the survey document, not the CSV.
+// v1 had 1–5 scales; their end labels were defined in the survey document, not the CSV.
 const SCALE = {
   min: 1,
   max: 5,
@@ -74,6 +74,18 @@ export function slugifyOption(english) {
     .replace(/^_+|_+$/g, "");
 }
 
+// "E01 = tripoli" shows the question when E01 is tripoli; "E01 != tripoli" when E01
+// is answered with anything else; "C27 = always | sometimes" for either value.
+function parseShowIf(id, text) {
+  const match = text.match(/^([A-Z]\d+[a-z]?)\s*(!?=)\s*(.+)$/);
+  if (!match) throw new Error(`${id}: can't read "Shown if" value "${text}"`);
+  return {
+    question: match[1],
+    when: match[2] === "=" ? "in" : "notIn",
+    values: match[3].split("|").map((value) => value.trim()),
+  };
+}
+
 export function parseQuestionsCsv(text) {
   const [header, ...rows] = parseCsvRows(text.replace(/^﻿/, ""));
   const column = (name) => {
@@ -81,7 +93,13 @@ export function parseQuestionsCsv(text) {
     if (index === -1) throw new Error(`CSV is missing column "${name}"`);
     return index;
   };
+  // Optional columns, added in v2: an absent column reads as empty.
+  const optional = (name) => header.indexOf(name);
   const columns = {
+    showIf: optional("Shown if"),
+    validation: optional("Validation"),
+    hintEn: optional("Hint (English)"),
+    hintAr: optional("Hint (Arabic)"),
     id: column("ID"),
     audience: column("Audience"),
     type: column("Type"),
@@ -92,7 +110,7 @@ export function parseQuestionsCsv(text) {
     max: column("Max selections"),
   };
 
-  return rows.map((row) => {
+  const parsed = rows.map((row) => {
     const id = row[columns.id];
     const type = row[columns.type];
     const question = {
@@ -116,9 +134,33 @@ export function parseQuestionsCsv(text) {
       if (row[columns.max]) question.maxSelections = Number(row[columns.max]);
     } else if (type === "scale") {
       Object.assign(question, SCALE);
-    } else if (type !== "paragraph" && type !== "text") {
+    } else if (!["paragraph", "text", "number"].includes(type)) {
       throw new Error(`${id}: unknown question type "${type}"`);
+    }
+
+    const cell = (index) => (index === -1 ? "" : (row[index] ?? "").trim());
+    if (cell(columns.showIf)) question.showIf = parseShowIf(id, cell(columns.showIf));
+    if (cell(columns.validation)) {
+      if (!["phone", "phoneOrEmail"].includes(cell(columns.validation))) {
+        throw new Error(`${id}: unknown validation "${cell(columns.validation)}"`);
+      }
+      question.validation = cell(columns.validation);
+    }
+    if (cell(columns.hintEn) || cell(columns.hintAr)) {
+      question.hint = { en: cell(columns.hintEn), ar: cell(columns.hintAr) };
     }
     return question;
   });
+
+  const byId = new Map(parsed.map((question) => [question.id, question]));
+  for (const question of parsed.filter((q) => q.showIf)) {
+    const parent = byId.get(question.showIf.question);
+    if (!parent?.options) throw new Error(`${question.id}: "Shown if" needs a choice question`);
+    for (const value of question.showIf.values) {
+      if (!parent.options.some((option) => option.value === value)) {
+        throw new Error(`${question.id}: ${parent.id} has no option "${value}"`);
+      }
+    }
+  }
+  return parsed;
 }
