@@ -3,10 +3,9 @@
 import { randomUUID } from "node:crypto";
 
 import { submissionSchema, validateSubmission } from "@/survey/schema";
+import type { StoredResponse } from "@/survey/schema";
 
-import { DatabaseNotConfiguredError } from "./db";
-import type { SqlRunner } from "./migrations";
-import { hasResponse, isRateLimited, saveResponse } from "./store";
+import { SheetConfigurationError, SheetSyncError, saveResponseToSheet } from "./sheets";
 
 export const MAX_BODY_BYTES = 32 * 1024;
 
@@ -76,7 +75,7 @@ async function readBody(request: Request): Promise<string | null> {
 
 export async function handleSubmission(
   request: Request,
-  getDb: () => Promise<SqlRunner>,
+  saveSheet: (response: StoredResponse, ip: string) => Promise<"saved" | "duplicate" | "rate_limited"> = saveResponseToSheet,
 ): Promise<Response> {
   const requestId = randomUUID();
   const startedAt = Date.now();
@@ -109,9 +108,6 @@ export async function handleSubmission(
   }
 
   try {
-    if (process.env.NODE_ENV === "production" && !process.env.RATE_LIMIT_SECRET) {
-      throw new DatabaseNotConfiguredError("RATE_LIMIT_SECRET is not set.");
-    }
     const envelope = submissionSchema.safeParse(body);
     if (!envelope.success) return finish("malformed", fail(400, "malformed"));
 
@@ -125,29 +121,23 @@ export async function handleSubmission(
       );
     }
 
-    const db = await getDb();
-
-    if (await hasResponse(db, result.response.submissionId)) {
-      return finish("duplicate", reply(200, { ok: true }), audience);
-    }
-    if (await isRateLimited(db, clientIp(request))) {
-      // The first request may have finished while this retry checked the limit.
-      if (await hasResponse(db, result.response.submissionId)) {
-        return finish("duplicate", reply(200, { ok: true }), audience);
-      }
+    const outcome = await saveSheet(result.response, clientIp(request));
+    if (outcome === "rate_limited") {
       return finish("rate_limited", fail(429, "rate_limited"), audience);
     }
-
-    const created = await saveResponse(db, result.response);
     return finish(
-      created ? "saved" : "duplicate",
-      reply(created ? 201 : 200, { ok: true }),
+      outcome,
+      reply(outcome === "saved" ? 201 : 200, { ok: true }),
       audience,
     );
   } catch (error) {
-    if (error instanceof DatabaseNotConfiguredError) {
+    if (error instanceof SheetConfigurationError) {
       console.error(JSON.stringify({ event: "survey.config_error", requestId, message: error.message }));
       return finish("unavailable", fail(503, "unavailable"));
+    }
+    if (error instanceof SheetSyncError) {
+      console.error(JSON.stringify({ event: "survey.sheet_sync_error", requestId, message: error.message }));
+      return finish("sheet_unavailable", fail(503, "unavailable"));
     }
     // Driver messages can quote parameters, so only the type and code are logged.
     console.error(

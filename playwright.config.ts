@@ -14,14 +14,16 @@ export default defineConfig({
     { name: "mobile", use: { ...devices["Pixel 7"] } },
   ],
   webServer: {
-    // Tests the production build, against a throwaway embedded database.
-    command: `rm -rf .data/e2e && npx next build && npx next start -p ${PORT}`,
+    // Browser submissions are mocked so tests never write to the real Sheet.
+    command: `npx next build && npx next start -p ${PORT}`,
     url: `http://localhost:${PORT}/en`,
     timeout: 180_000,
     reuseExistingServer: false,
     env: {
-      HOBBI_EMBEDDED_DB_PATH: ".data/e2e",
       RATE_LIMIT_SECRET: "e2e-only-not-a-real-secret",
+      GOOGLE_SHEET_ID: "",
+      GOOGLE_SERVICE_ACCOUNT_EMAIL: "",
+      GOOGLE_PRIVATE_KEY: "",
       NEXT_TELEMETRY_DISABLED: "1",
     },
   },
