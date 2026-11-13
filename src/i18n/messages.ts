@@ -67,6 +67,7 @@ export type Messages = {
     notAnswered: string;
     submit: string;
     invalid: string;
+    screeningInvalid: string;
   };
   submit: {
     network: string;
@@ -115,7 +116,7 @@ const en: Messages = {
     start: "Start the survey",
   },
   draft: {
-    restored: "Your earlier answers are still here.",
+    restored: "Your earlier answers are still here, except contact details. Please re-enter any contact details before submitting.",
     startOver: "Start over",
   },
   screening: {
@@ -172,10 +173,11 @@ const en: Messages = {
     notAnswered: "Not answered",
     submit: "Submit answers",
     invalid: "Some answers need your attention. We've taken you to the first one.",
+    screeningInvalid: "Please confirm your age and consent before submitting.",
   },
   submit: {
     network:
-      "Your answers weren't sent because the connection failed. They're still here, so check your connection and try again.",
+      "We couldn't confirm whether your answers were saved. They're still here, so check your connection and try again. Retrying won't create a second response.",
     rateLimited:
       "Too many responses have come from this network recently. Your answers are still here, so try again in a little while.",
     server:
@@ -225,7 +227,7 @@ const ar: Messages = {
     start: "ابدأ الاستطلاع",
   },
   draft: {
-    restored: "إجاباتك السابقة ما زالت هنا.",
+    restored: "إجاباتك السابقة ما زالت هنا، باستثناء معلومات التواصل. يُرجى إدخالها مجدداً قبل الإرسال.",
     startOver: "البدء من جديد",
   },
   screening: {
@@ -282,10 +284,11 @@ const ar: Messages = {
     notAnswered: "لم تتم الإجابة",
     submit: "إرسال الإجابات",
     invalid: "بعض الإجابات تحتاج إلى انتباهك. انتقلنا بك إلى أولها.",
+    screeningInvalid: "يُرجى تأكيد عمرك وموافقتك قبل إرسال الإجابات.",
   },
   submit: {
     network:
-      "لم تُرسل إجاباتك بسبب تعذر الاتصال. ما زالت إجاباتك هنا، لذا تحقق من اتصالك وحاول مرة أخرى.",
+      "تعذر التأكد مما إذا كانت إجاباتك قد حُفظت. ما زالت هنا، لذا تحقق من اتصالك وحاول مرة أخرى. إعادة المحاولة لن تنشئ رداً مكرراً.",
     rateLimited:
       "وصل عدد كبير من الردود من هذه الشبكة مؤخراً. ما زالت إجاباتك هنا، فحاول مرة أخرى بعد قليل.",
     server:

@@ -32,7 +32,7 @@ import {
   surveyResolver,
   type SurveyValues,
 } from "@/survey/form";
-import { directionFor, type Locale } from "@/survey/types";
+import { directionFor, isLocale, type Locale } from "@/survey/types";
 
 import { clearDraft, loadDraft, saveDraft } from "./draft";
 import { LocaleProvider } from "./locale-context";
@@ -83,6 +83,13 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
 
   const t = messages[locale];
 
+  const syncLocale = useCallback((next: Locale) => {
+    setLocale(next);
+    document.documentElement.lang = next;
+    document.documentElement.dir = directionFor(next);
+    document.title = messages[next].meta.title;
+  }, []);
+
   const go = useCallback((next: Screen) => {
     hasNavigated.current = true;
     setNotice(null);
@@ -120,6 +127,8 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
     const onPopState = (event: PopStateEvent) => {
       const target = event.state?.hobbiScreen as Screen | undefined;
       if (!target) return;
+      const pathLocale = window.location.pathname.split("/")[1];
+      if (isLocale(pathLocale)) syncLocale(pathLocale);
       hasNavigated.current = true;
       setNotice(null);
       setSubmit({ status: "idle" });
@@ -128,7 +137,7 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  }, [syncLocale]);
 
   // Every screen change starts at the top with focus on the new heading.
   useEffect(() => {
@@ -160,10 +169,7 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
   // the URL in place, so nothing typed so far is lost.
   const switchLocale = () => {
     const next: Locale = locale === "ar" ? "en" : "ar";
-    setLocale(next);
-    document.documentElement.lang = next;
-    document.documentElement.dir = directionFor(next);
-    document.title = messages[next].meta.title;
+    syncLocale(next);
     window.history.replaceState(window.history.state, "", `/${next}`);
   };
 
@@ -274,10 +280,21 @@ export function SurveyApp({ initialLocale }: { initialLocale: Locale }) {
   };
 
   const handleSubmit = async () => {
-    if (!audience || submit.status === "submitting") return;
+    if (submit.status === "submitting") return;
 
     // Back, Forward or a restored draft can skip steps, so check everything.
     const values = form.getValues();
+    if (!values.adult || (values.adult === "no" && audience === "club")) {
+      go({ name: "age" });
+      setNotice(t.review.screeningInvalid);
+      return;
+    }
+    if (values.consent !== "yes") {
+      go({ name: "consent" });
+      setNotice(t.review.screeningInvalid);
+      return;
+    }
+    if (!audience) return;
     const active = questionsFor(audience).filter((question) =>
       isShownTo(question.id, values.answers, minor),
     );

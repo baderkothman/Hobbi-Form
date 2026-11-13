@@ -262,6 +262,27 @@ describe("rejecting bad submissions", () => {
     );
   });
 
+  it("stops reading an oversized streamed body without a content length", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_BODY_BYTES + 1));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const request = new Request("https://survey.example/api/submissions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+
+    await expectRejected(await handleSubmission(request, async () => db), 413, "too_large");
+    expect(canceled).toBe(true);
+  });
+
   it("rejects cross-site requests", async () => {
     await expectRejected(
       await post(validSubmission(), { origin: "https://evil.example" }),
@@ -302,6 +323,29 @@ describe("abuse protection", () => {
       "x-forwarded-for": "198.51.100.9",
     });
     expect(otherNetwork.status).toBe(201);
+  });
+
+  it("does not count invalid answers against the shared network limit", async () => {
+    const invalid = validSubmission("explorer", {
+      answers: { ...validAnswers("explorer"), E03: ["not_an_option"] },
+    });
+    for (let i = 0; i < RATE_LIMIT_PER_HOUR + 1; i += 1) {
+      expect((await post(invalid)).status).toBe(400);
+    }
+    expect((await post(validSubmission())).status).toBe(201);
+    const { rows } = await db.query("SELECT count FROM rate_limits");
+    expect(rows).toEqual([{ count: 1 }]);
+  });
+
+  it("confirms a saved retry after the network reaches its limit", async () => {
+    const first = validSubmission();
+    expect((await post(first)).status).toBe(201);
+    for (let i = 1; i < RATE_LIMIT_PER_HOUR; i += 1) {
+      expect((await post(validSubmission())).status).toBe(201);
+    }
+    expect((await post(first)).status).toBe(200);
+    expect((await post(validSubmission())).status).toBe(429);
+    expect(await storedResponses()).toHaveLength(RATE_LIMIT_PER_HOUR);
   });
 
   it("starts a fresh count each hour and stores no raw IP", async () => {

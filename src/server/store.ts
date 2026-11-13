@@ -29,6 +29,15 @@ export async function saveResponse(
   return result.rowCount === 1;
 }
 
+/** A retry can confirm an earlier save without using another rate-limit slot. */
+export async function hasResponse(db: SqlRunner, submissionId: string): Promise<boolean> {
+  const { rows } = await db.query(
+    "SELECT 1 FROM responses WHERE submission_id = $1 LIMIT 1",
+    [submissionId],
+  );
+  return rows.length > 0;
+}
+
 export const RATE_LIMIT_PER_HOUR = 20;
 
 // A fallback key is fine for development; submit.ts requires a real one in production.

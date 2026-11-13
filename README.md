@@ -6,7 +6,7 @@ The survey content (v2) lives in [survey-v2/](survey-v2/): the survey document, 
 
 ## Get started
 
-Requires Node 24 or newer.
+Requires Node 24.x.
 
 ```bash
 npm install

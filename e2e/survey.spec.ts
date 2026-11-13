@@ -168,6 +168,44 @@ test.describe("behaviour in a real browser", () => {
     await expect(page.getByRole("radio", { name: "طرابلس" })).toBeChecked();
   });
 
+  test("browser history restores the language that matches the URL", async ({ page }) => {
+    await page.goto("/en");
+    await page.getByRole("button", { name: messages.en.welcome.start }).click();
+    await page.getByTestId("language-switch").click();
+    await expect(page).toHaveURL(/\/ar$/);
+    await expect(page.locator("html")).toHaveAttribute("lang", "ar");
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/en$/);
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
+    await expect(page.locator("html")).toHaveAttribute("dir", "ltr");
+    await expect(page.locator("h1")).toHaveText(messages.en.welcome.title);
+
+    await page.goForward();
+    await expect(page).toHaveURL(/\/ar$/);
+    await expect(page.locator("html")).toHaveAttribute("lang", "ar");
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    await expect(page.locator("h1")).toHaveText(messages.ar.screening.adultQuestion);
+  });
+
+  test("choices reflow without sideways scrolling when text is enlarged", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto("/en");
+    await passScreening(page, "en");
+    await page.locator("input[name=audience]").first().check();
+    await page.getByRole("button", { name: messages.en.common.next }).click();
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "200%";
+    });
+
+    await expectNoSidewaysScroll(page);
+    const smallestChoice = await page.locator(".hobbi-option").evaluateAll((options) =>
+      Math.min(...options.map((option) => option.getBoundingClientRect().height)),
+    );
+    expect(smallestChoice).toBeGreaterThanOrEqual(44);
+    await expect(page.getByRole("button", { name: messages.en.common.next })).toBeInViewport();
+  });
+
   test("pages work from the keyboard alone", async ({ page, isMobile }) => {
     test.skip(isMobile, "Keyboard journey is a desktop concern");
     const pressUntilFocused = async (name: string) => {

@@ -643,6 +643,24 @@ describe("submission", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("returns to consent if browser history reaches review after consent changes", async () => {
+    const user = await toReview("explorer");
+    window.dispatchEvent(new PopStateEvent("popstate", {
+      state: { hobbiScreen: { name: "consent" } },
+    }));
+    await screen.findByRole("heading", { name: en.screening.consentQuestion });
+    await user.click(screen.getByRole("radio", { name: en.screening.consentNo }));
+    window.dispatchEvent(new PopStateEvent("popstate", {
+      state: { hobbiScreen: { name: "review" } },
+    }));
+    await screen.findByRole("heading", { name: en.review.title });
+
+    await clickButton(user, en.review.submit);
+    await screen.findByRole("heading", { name: en.screening.consentQuestion });
+    expect(screen.getByRole("alert")).toHaveTextContent(en.review.screeningInvalid);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     [500, en.submit.server],
     [503, en.submit.server],

@@ -6,7 +6,7 @@ import { submissionSchema, validateSubmission } from "@/survey/schema";
 
 import { DatabaseNotConfiguredError } from "./db";
 import type { SqlRunner } from "./migrations";
-import { isRateLimited, saveResponse } from "./store";
+import { hasResponse, isRateLimited, saveResponse } from "./store";
 
 export const MAX_BODY_BYTES = 32 * 1024;
 
@@ -56,8 +56,22 @@ function clientIp(request: Request): string {
 async function readBody(request: Request): Promise<string | null> {
   const declared = Number(request.headers.get("content-length") ?? 0);
   if (declared > MAX_BODY_BYTES) return null;
-  const text = await request.text();
-  return new TextEncoder().encode(text).length > MAX_BODY_BYTES ? null : text;
+  if (!request.body) return "";
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    bytes += value.byteLength;
+    if (bytes > MAX_BODY_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+    text += decoder.decode(value, { stream: true });
+  }
 }
 
 export async function handleSubmission(
@@ -98,12 +112,6 @@ export async function handleSubmission(
     if (process.env.NODE_ENV === "production" && !process.env.RATE_LIMIT_SECRET) {
       throw new DatabaseNotConfiguredError("RATE_LIMIT_SECRET is not set.");
     }
-    const db = await getDb();
-
-    if (await isRateLimited(db, clientIp(request))) {
-      return finish("rate_limited", fail(429, "rate_limited"));
-    }
-
     const envelope = submissionSchema.safeParse(body);
     if (!envelope.success) return finish("malformed", fail(400, "malformed"));
 
@@ -115,6 +123,19 @@ export async function handleSubmission(
         fail(400, "invalid", { fields: result.fields }),
         audience,
       );
+    }
+
+    const db = await getDb();
+
+    if (await hasResponse(db, result.response.submissionId)) {
+      return finish("duplicate", reply(200, { ok: true }), audience);
+    }
+    if (await isRateLimited(db, clientIp(request))) {
+      // The first request may have finished while this retry checked the limit.
+      if (await hasResponse(db, result.response.submissionId)) {
+        return finish("duplicate", reply(200, { ok: true }), audience);
+      }
+      return finish("rate_limited", fail(429, "rate_limited"), audience);
     }
 
     const created = await saveResponse(db, result.response);

@@ -104,8 +104,8 @@ type ScreenSize = {
 
 // A 390x844 phone (single column) and a 1280x720 laptop (two columns).
 const SCREEN_SIZES: readonly ScreenSize[] = [
-  { available: 680, charsPerLine: 30, titleLine: 25, promptLine: 26, sectionTitle: 60, gap: 36, row: 48, denseRow: 39, columnsFrom: Infinity },
-  { available: 560, charsPerLine: 46, titleLine: 30, promptLine: 26, sectionTitle: 70, gap: 36, row: 50, denseRow: 46, columnsFrom: 4 },
+  { available: 680, charsPerLine: 30, titleLine: 25, promptLine: 26, sectionTitle: 60, gap: 36, row: 48, denseRow: 47, columnsFrom: Infinity },
+  { available: 560, charsPerLine: 46, titleLine: 30, promptLine: 26, sectionTitle: 70, gap: 36, row: 50, denseRow: 47, columnsFrom: 4 },
 ];
 
 const longest = (texts: string[]) => Math.max(...texts.map((text) => text.length));
