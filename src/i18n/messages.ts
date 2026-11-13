@@ -51,6 +51,15 @@ export type Messages = {
     stepErrors: (count: number) => string;
     scaleHint: (min: number, max: number) => string;
   };
+  contact: {
+    method: string;
+    phone: string;
+    email: string;
+    countryCode: string;
+    searchCountry: string;
+    noCountries: string;
+    phonePlaceholder: string;
+  };
   errors: {
     required: string;
     too_many: (max: number) => string;
@@ -155,6 +164,15 @@ const en: Messages = {
         ? "1 question on this page needs your attention."
         : `${count} questions on this page need your attention.`,
     scaleHint: (min, max) => `From ${min} to ${max}`,
+  },
+  contact: {
+    method: "Contact method",
+    phone: "WhatsApp number",
+    email: "Email",
+    countryCode: "Country calling code",
+    searchCountry: "Search country or code",
+    noCountries: "No countries found.",
+    phonePlaceholder: "Phone number",
   },
   errors: {
     required: "Choose an answer to continue.",
@@ -266,6 +284,15 @@ const ar: Messages = {
         ? "هناك سؤال واحد في هذه الصفحة يحتاج إلى انتباهك."
         : `عدد الأسئلة التي تحتاج إلى انتباهك في هذه الصفحة: ${count}.`,
     scaleHint: (min, max) => `من ${min} إلى ${max}`,
+  },
+  contact: {
+    method: "طريقة التواصل",
+    phone: "رقم واتساب",
+    email: "البريد الإلكتروني",
+    countryCode: "رمز الاتصال الدولي",
+    searchCountry: "ابحث عن بلد أو رمز",
+    noCountries: "لم يتم العثور على بلد.",
+    phonePlaceholder: "رقم الهاتف",
   },
   errors: {
     required: "اختر إجابة للمتابعة.",

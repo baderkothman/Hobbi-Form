@@ -132,6 +132,34 @@ test.describe("complete journeys", () => {
 });
 
 test.describe("behaviour in a real browser", () => {
+  test("searches country codes and keeps the selected phone number", async ({ page }) => {
+    await page.goto("/en");
+    await passScreening(page, "en");
+    await page.locator("input[name=audience]").first().check();
+    await page.getByRole("button", { name: messages.en.common.next }).click();
+    for (let guard = 0; guard < 40 && await page.locator('[data-question-id="E21"]').count() === 0; guard += 1) {
+      await answerVisibleQuestions(page);
+      await page.getByRole("button", { name: messages.en.common.next }).click();
+    }
+    await expect(page.locator('[data-question-id="E21"]')).toBeVisible();
+    await answerVisibleQuestions(page);
+    await page.getByRole("button", { name: messages.en.common.next }).click();
+
+    await page.getByRole("button", { name: /Country calling code: Lebanon \+961/ }).click();
+    await expectAccessible(page);
+    const search = page.getByRole("searchbox", { name: messages.en.contact.searchCountry });
+    await search.fill("United Kingdom");
+    await expect(page.getByRole("button", { name: "United Kingdom +44" })).toBeVisible();
+    await search.press("Enter");
+    await expect(page.getByRole("button", { name: /Country calling code: United Kingdom \+44/ })).toBeVisible();
+    const number = page.getByRole("textbox", { name: /WhatsApp number for the invite/ });
+    await number.fill("07700900123");
+    await page.getByRole("button", { name: messages.en.common.next }).click();
+    await page.getByRole("button", { name: messages.en.common.previous }).click();
+    await expect(number).toHaveValue("7700900123");
+    await expect(page.getByRole("button", { name: /Country calling code: United Kingdom \+44/ })).toBeVisible();
+  });
+
   test("exits politely and audits clean when consent is declined", async ({ page }) => {
     const t = messages.en;
     await page.goto("/en");

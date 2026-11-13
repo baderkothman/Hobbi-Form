@@ -242,6 +242,156 @@
     margin-top: 0.3em;
   }
 
+  .contact-method-switch {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .contact-method-switch button {
+    min-height: 44px;
+    padding: 8px 14px;
+    border: 1px solid var(--color-hairline);
+    border-radius: 999px;
+    background: #fff;
+    color: var(--color-ink);
+    font-size: 0.9375rem;
+    cursor: pointer;
+  }
+
+  .contact-method-switch button[aria-pressed="true"] {
+    border-color: var(--color-teal);
+    background: var(--color-tint);
+    color: var(--color-pine);
+    font-weight: 550;
+  }
+
+  .phone-number-control {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    min-width: 0;
+    direction: ltr;
+  }
+
+  .phone-number-control > :last-child {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .country-code-picker {
+    position: relative;
+    flex: none;
+  }
+
+  .country-code-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 112px;
+    height: 100%;
+    min-height: 48px;
+    padding: 8px 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+    background: #fff;
+    color: var(--color-ink);
+    font-size: 1rem;
+    cursor: pointer;
+  }
+
+  .country-code-trigger:hover,
+  .country-code-option:hover {
+    background: var(--color-tint);
+  }
+
+  .country-code-trigger:focus-visible,
+  .country-code-search:focus-visible,
+  .country-code-option:focus-visible,
+  .contact-method-switch button:focus-visible {
+    outline: 2px solid var(--color-teal);
+    outline-offset: 2px;
+  }
+
+  .country-code-popup {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 6px);
+    left: 0;
+    display: flex;
+    flex-direction: column;
+    width: min(360px, calc(100vw - 32px));
+    max-height: min(380px, calc(100dvh - 150px));
+    padding: 8px;
+    border: 1px solid var(--color-hairline);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 12px 32px rgb(6 42 38 / 15%);
+  }
+
+  .country-code-search {
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 9px;
+    background: #fff;
+    color: var(--color-ink);
+    font-size: 1rem;
+  }
+
+  .country-code-list {
+    min-height: 0;
+    margin-top: 6px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .country-code-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    color: var(--color-ink);
+    text-align: start;
+    cursor: pointer;
+  }
+
+  .country-code-option[aria-current="true"] {
+    background: var(--color-tint);
+    font-weight: 550;
+  }
+
+  .country-code-option span:first-child {
+    min-width: 0;
+  }
+
+  .country-code-option span:last-child {
+    flex: none;
+  }
+
+  .country-code-empty {
+    padding: 16px 10px;
+    color: var(--color-muted);
+  }
+
+  @media (max-width: 600px) {
+    .country-code-popup {
+      position: fixed;
+      top: auto;
+      right: 12px;
+      bottom: calc(76px + env(safe-area-inset-bottom));
+      left: 12px;
+      width: auto;
+      max-height: min(65dvh, 480px);
+    }
+  }
+
   .option-list {
     display: grid;
     gap: 8px;

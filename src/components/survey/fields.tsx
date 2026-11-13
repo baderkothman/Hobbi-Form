@@ -35,6 +35,7 @@ import type {
   TextQuestion,
 } from "@/survey/types";
 
+import { ContactInput } from "./ContactInput";
 import { useLocale } from "./locale-context";
 
 export type HeadingRef = Ref<HTMLHeadingElement>;
@@ -441,8 +442,20 @@ function FreeTextField({
             {t.question.characters(value.length, maxLength)}
           </p>
         </>
+      ) : validation ? (
+        <ContactInput
+          id={inputId}
+          name={name}
+          inputRef={field.ref}
+          value={value}
+          allowEmail={validation === "phoneOrEmail"}
+          labelledBy={isPageHeading ? titleId : undefined}
+          describedBy={shared["aria-describedby"]}
+          invalid={Boolean(message)}
+          onChange={setValue}
+          onBlur={shared.onBlur}
+        />
       ) : (
-        // Numbers and emails must survive phone keyboards unchanged.
         <TextInput
           {...shared}
           size="large"

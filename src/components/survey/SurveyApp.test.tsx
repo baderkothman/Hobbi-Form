@@ -432,28 +432,46 @@ describe("contact details", () => {
     expect(pageHeading()).toHaveTextContent(prompt("E22"));
     expect(number).toHaveAccessibleDescription(/only use it to send the launch invite/);
     expect(number).toHaveAttribute("inputmode", "tel");
+    expect(screen.getByRole("button", { name: /Country calling code: Lebanon \+961/ })).toBeVisible();
+  });
+
+  it("searches country codes and keeps the selected code in the saved answer", async () => {
+    const user = await toInvite();
+    await user.click(screen.getByRole("radio", { name: "Yes, invite me" }));
+    await next(user);
+    await user.click(screen.getByRole("button", { name: /Country calling code: Lebanon \+961/ }));
+    const search = screen.getByRole("searchbox", { name: en.contact.searchCountry });
+    await user.type(search, "United Kingdom");
+    await user.click(screen.getByRole("button", { name: /United Kingdom \+44/ }));
+    await user.type(screen.getByRole("textbox", { name: /WhatsApp number for the invite/ }), "7700900123");
+    await next(user);
+    await clickButton(user, en.common.previous);
+    await waitFor(() => expect(isOnScreen("E22")).toBe(true));
+    expect(screen.getByRole("button", { name: /Country calling code: United Kingdom \+44/ })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: /WhatsApp number for the invite/ })).toHaveValue("7700900123");
   });
 
   it("sends each contact with its own opt-in, and never keeps them in the draft", async () => {
     const user = await toInvite();
     await user.click(screen.getByRole("radio", { name: "Yes, invite me" }));
     await next(user);
-    await user.type(screen.getByRole("textbox"), "+961 3 123 456");
+    await user.type(screen.getByRole("textbox"), "03123456");
     expect(JSON.stringify({ ...sessionStorage })).not.toContain("123 456");
     await next(user);
     await user.click(screen.getByRole("radio", { name: "Yes, I opt in" }));
     await next(user);
+    await user.click(screen.getByRole("button", { name: en.contact.email }));
     await user.type(interviewContact(), "person@example.com");
     await completeQuestions(user);
 
-    expect(reviewItem("E22")).toHaveTextContent("+961 3 123 456");
+    expect(reviewItem("E22")).toHaveTextContent("+9613123456");
     expect(JSON.stringify({ ...sessionStorage })).not.toContain("person@example.com");
     await clickButton(user, en.review.submit);
 
     await screen.findByRole("heading", { name: en.thanks.title });
     expect(lastBody().answers).toMatchObject({
       E21: "yes_invite_me",
-      E22: "+961 3 123 456",
+      E22: "+9613123456",
       E17: "person@example.com",
     });
     expect(screen.getByText(en.thanks.contactOptIn)).toBeInTheDocument();
@@ -476,6 +494,7 @@ describe("contact details", () => {
     await next(user);
     await user.click(screen.getByRole("radio", { name: "Yes, I opt in" }));
     await next(user);
+    await user.click(screen.getByRole("button", { name: en.contact.email }));
     await user.type(interviewContact(), "not valid!");
     await clickButton(user, en.common.next);
 
@@ -489,6 +508,7 @@ describe("contact details", () => {
     await next(user);
     await user.click(screen.getByRole("radio", { name: "Yes, I opt in" }));
     await next(user);
+    await user.click(screen.getByRole("button", { name: en.contact.email }));
     await user.type(interviewContact(), "person@example.com");
     await clickButton(user, en.common.previous);
     await waitFor(() => expect(isOnScreen("E16")).toBe(true));
